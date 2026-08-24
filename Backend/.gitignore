@@ -14,6 +14,9 @@
 # AI Agronomist cycle photos (runtime data, not source)
 /Photos/
 
+# Docker bind-mount target for greenhouse.db + Photos/ (runtime data, not source)
+/appdata/
+
 # User-specific files
 *.rsuser
 *.suo

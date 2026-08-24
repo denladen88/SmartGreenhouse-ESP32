@@ -48,18 +48,28 @@ public class AiAgronomistService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Запускаємо перший цикл одразу при старті, а не чекаємо повний
+        // PollIntervalMinutes (інакше після кожного рестарту сервісу пристрій
+        // залишався б без свіжого рішення AI аж до години).
+        await RunAnalysisCycleSafeAsync(stoppingToken);
+
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(_agronomistOptions.PollIntervalMinutes));
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            try
-            {
-                await RunAnalysisCycleAsync(stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "AI Agronomist analysis cycle failed");
-            }
+            await RunAnalysisCycleSafeAsync(stoppingToken);
+        }
+    }
+
+    private async Task RunAnalysisCycleSafeAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            await RunAnalysisCycleAsync(stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AI Agronomist analysis cycle failed");
         }
     }
 
@@ -106,7 +116,8 @@ public class AiAgronomistService : BackgroundService
         var decisionHistoryText = recentDecisions.Count == 0
             ? "(none yet)"
             : string.Join("\n", recentDecisions.Select(d =>
-                $"{d.Timestamp:HH:mm} Pump={(d.PumpOn ? "On" : "Off")} Fan={(d.FanOn ? "On" : "Off")} — {d.Reason}"));
+                $"{d.Timestamp:HH:mm} Pump={(d.PumpOn ? "On" : "Off")} Fan={(d.FanOn ? "On" : "Off")} " +
+                $"Light={d.LightBrightness} — {d.Reason}"));
 
         var trendText = string.Join(
             "\n",
@@ -157,6 +168,7 @@ public class AiAgronomistService : BackgroundService
             "actually normal or concerning for this specific species — not generic assumptions. " +
             "Pay attention to the RATE of change over time (e.g. how fast the soil is drying out or the temperature is rising), " +
             "not just the latest snapshot.\n\n" +
+            $"Current local time: {DateTime.Now:yyyy-MM-dd HH:mm} ({DateTime.Now:dddd}).\n\n" +
             plantProfile +
             $"Recent past decisions, oldest to newest (for continuity across cycles — avoid flip-flopping the pump/fan on " +
             $"and off if the trend hasn't meaningfully changed since the last decision):\n{decisionHistoryText}\n\n" +
@@ -172,10 +184,19 @@ public class AiAgronomistService : BackgroundService
             $"use this for at-a-glance direction, the detailed readings below show the full shape):\n{trendSummaryText}\n\n" +
             $"Detailed sensor trend, oldest to newest, {trend.Count} points over the last {(int)trendWindow.TotalMinutes} minutes " +
             $"('N/A' means that sensor had no reading in that time bucket):\n{trendText}\n\n" +
-            "Decide if we need to turn on the water pump or cooling fan. Also describe what you see in the photo " +
-            "(plant condition, leaves, soil surface, anything notable). Reply strictly in JSON format matching this schema: " +
-            "{ \"PumpOn\": bool, \"FanOn\": bool, \"Reason\": \"short explanation referencing the trend\", " +
-            "\"PhotoDescription\": \"what you see in the photo\" } without markdown code blocks.";
+            "There is also a grow light (white, adjustable 0-255 brightness) you control directly — it is the ONLY light " +
+            "source you can add; the Lux trend above is ambient light the plant is already getting. Use the current local " +
+            "time together with the Lux trend to judge whether it's currently daytime or nighttime, and decide LightBrightness " +
+            "accordingly: during the plant's normal daytime hours, if ambient Lux is low (e.g. an overcast day), supplement " +
+            "with grow light brightness roughly proportional to how far short of a healthy level the ambient light is. " +
+            "During nighttime hours, do NOT turn the grow light on just because ambient Lux is low — the plant needs a dark " +
+            "rest period overnight like any normal day/night cycle, and keeping light on through the night is harmful, not " +
+            "helpful. Avoid flip-flopping brightness sharply between consecutive cycles unless the trend genuinely changed.\n\n" +
+            "Decide if we need to turn on the water pump or cooling fan, and what the grow light brightness should be. " +
+            "Also describe what you see in the photo (plant condition, leaves, soil surface, anything notable). Reply " +
+            "strictly in JSON format matching this schema: { \"PumpOn\": bool, \"FanOn\": bool, \"LightBrightness\": " +
+            "int (0-255), \"Reason\": \"short explanation referencing the trend\", \"PhotoDescription\": \"what you see " +
+            "in the photo\" } without markdown code blocks.";
 
         var requestBody = new
         {
@@ -210,7 +231,7 @@ public class AiAgronomistService : BackgroundService
         response.EnsureSuccessStatusCode();
 
         var rawBody = await response.Content.ReadAsStringAsync(stoppingToken);
-        _logger.LogInformation("Raw Gemini response: {RawBody}", rawBody);
+        _logger.LogDebug("Raw Gemini response: {RawBody}", rawBody);
 
         var geminiResponse = JsonSerializer.Deserialize<GeminiGenerateContentResponse>(rawBody);
         var text = geminiResponse?.Candidates?.FirstOrDefault()?.Content?.Parts?.FirstOrDefault()?.Text;
@@ -229,9 +250,20 @@ public class AiAgronomistService : BackgroundService
             return;
         }
 
+        var lightBrightness = Math.Clamp(decision.LightBrightness, 0, 255);
+
         _logger.LogInformation(
-            "AI Agronomist decision: PumpOn={PumpOn} FanOn={FanOn} Reason={Reason} PhotoDescription={PhotoDescription}",
-            decision.PumpOn, decision.FanOn, decision.Reason, decision.PhotoDescription);
+            "AI Agronomist decision:\n" +
+            "  Pump:   {Pump}\n" +
+            "  Fan:    {Fan}\n" +
+            "  Light:  {Light}\n" +
+            "  Reason: {Reason}\n" +
+            "  Photo:  {Photo}",
+            decision.PumpOn ? "On" : "Off",
+            decision.FanOn ? "On" : "Off",
+            lightBrightness,
+            decision.Reason,
+            decision.PhotoDescription);
 
         try
         {
@@ -241,6 +273,7 @@ public class AiAgronomistService : BackgroundService
             {
                 PumpOn = decision.PumpOn,
                 FanOn = decision.FanOn,
+                LightBrightness = lightBrightness,
                 Reason = decision.Reason,
                 PhotoDescription = decision.PhotoDescription,
                 PhotoFileName = photoFileName
@@ -252,7 +285,7 @@ public class AiAgronomistService : BackgroundService
             _logger.LogError(ex, "Failed to save AI decision record to the database");
         }
 
-        var commandPayload = JsonSerializer.Serialize(new AiCommand(decision.PumpOn, decision.FanOn));
+        var commandPayload = JsonSerializer.Serialize(new AiCommand(decision.PumpOn, decision.FanOn, lightBrightness));
         await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, commandPayload);
 
         _logger.LogInformation("Published command to {Topic}: {Payload}", _mqttOptions.CommandsTopic, commandPayload);

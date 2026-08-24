@@ -1,9 +1,8 @@
 #pragma once
 #include <cstdint>
-#include <Adafruit_NeoPixel.h>
 
-// Керує помпою (реле), вентилятором (реле) та grow-світлом (адресована
-// 24V RGB+TW стрічка, 5 каналів на піксель).
+// Керує помпою (реле), вентилятором (реле) та grow-світлом (Cold+Warm White
+// канали 24V стрічки, обидва разом через один ШІМ-сигнал — див. Config.h).
 class ActuatorService {
 public:
   ActuatorService();
@@ -17,19 +16,17 @@ public:
 
   void setPump(bool on);
   void setFan(bool on);
-  void setLight(bool on);
+  void setLight(uint8_t brightness); // 0 = вимкнено, 255 = максимальна яскравість
 
   bool isPumpOn() const { return _pumpOn; }
   bool isFanOn() const { return _fanOn; }
-  bool isLightOn() const { return _lightOn; }
+  bool isLightOn() const { return _lightBrightness > 0; }
 
 private:
   bool _pumpOn = false;
   bool _fanOn = false;
-  bool _lightOn = false;
+  uint8_t _lightBrightness = 0;
 
   unsigned long _pumpStartMs = 0; // millis() моменту останнього вмикання помпи
   unsigned long _fanStartMs = 0;  // millis() моменту останнього вмикання вентилятора
-
-  Adafruit_NeoPixel _strip;
 };

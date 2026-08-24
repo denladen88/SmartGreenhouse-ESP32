@@ -2,28 +2,7 @@
 #include <Arduino.h>
 #include "Config.h"
 
-namespace {
-// Adafruit_NeoPixel вміє пакувати через свій зручний API (fill()/Color())
-// лише 3 (RGB) або 4 (RGBW) байти на "піксель" — наша стрічка фізично має
-// 5 байтів на піксель (R,G,B,Cold White,Warm White), чого бібліотека
-// напряму не підтримує. Обхідний шлях: виділяємо буфер у форматі RGBW
-// (4 "віртуальних" байти/піксель) з запасом, достатнім щоб вмістити
-// NUM_LEDS*5 реальних байтів, і пишемо в нього напряму через getPixels(),
-// повністю ігноруючи межі "віртуальних" пікселів — show() лише передає
-// весь буфер байт-за-байтом по протоколу, форматування має значення тільки
-// для setPixelColor()/Color()/fill().
-constexpr int BYTES_PER_PHYSICAL_LED = 5;
-constexpr uint16_t VIRTUAL_PIXEL_COUNT = (NUM_LEDS * BYTES_PER_PHYSICAL_LED + 3) / 4;
-}  // namespace
-
-ActuatorService::ActuatorService()
-  // НЕПІДТВЕРДЖЕНО: точна модель чипа стрічки невідома (немає маркування/
-  // даташиту). Припускаємо WS2812-сумісний біт-таймінг (800кГц) — поширений
-  // серед одно-провідних адресованих ІС, але не гарантований для 24V
-  // 5-канальних RGB+TW чипів. Порядок байтів R,G,B,Cold,Warm у setLight()
-  // теж здогадка. Якщо нічого не засвітиться чи кольори вийдуть неправильні —
-  // це перші дві речі, які варто підозрювати й пробувати міняти.
-  : _strip(VIRTUAL_PIXEL_COUNT, LIGHT_PIN, NEO_GRBW + NEO_KHZ800) {}
+ActuatorService::ActuatorService() {}
 
 void ActuatorService::begin() {
   pinMode(PUMP_RELAY_PIN, OUTPUT);
@@ -31,8 +10,9 @@ void ActuatorService::begin() {
   digitalWrite(PUMP_RELAY_PIN, LOW);
   digitalWrite(FAN_PIN, LOW);
 
-  _strip.begin();
-  _strip.show(); // одразу гасимо всі пікселі
+  ledcSetup(LED_PWM_CHANNEL, LED_PWM_FREQ_HZ, LED_PWM_RESOLUTION_BITS);
+  ledcAttachPin(LIGHT_PIN, LED_PWM_CHANNEL);
+  ledcWrite(LED_PWM_CHANNEL, 0); // одразу гасимо
 }
 
 void ActuatorService::update() {
@@ -74,21 +54,7 @@ void ActuatorService::setFan(bool on) {
   digitalWrite(FAN_PIN, on ? HIGH : LOW);
 }
 
-void ActuatorService::setLight(bool on) {
-  _lightOn = on;
-
-  if (on) {
-    uint8_t* buf = _strip.getPixels();
-    for (int led = 0; led < NUM_LEDS; led++) {
-      uint8_t* px = buf + led * BYTES_PER_PHYSICAL_LED;
-      px[0] = 255; // R
-      px[1] = 255; // G
-      px[2] = 255; // B
-      px[3] = 255; // Cold White
-      px[4] = 255; // Warm White
-    }
-  } else {
-    _strip.clear(); // просто зануляє весь буфер — коректно незалежно від формату
-  }
-  _strip.show();
+void ActuatorService::setLight(uint8_t brightness) {
+  _lightBrightness = brightness;
+  ledcWrite(LED_PWM_CHANNEL, brightness);
 }

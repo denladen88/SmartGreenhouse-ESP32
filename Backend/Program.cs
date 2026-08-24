@@ -1,9 +1,22 @@
+using DotNetEnv;
 using Microsoft.EntityFrameworkCore;
 using SmartGreenhouse.Backend.Data;
 using SmartGreenhouse.Backend.Models;
 using SmartGreenhouse.Backend.Services;
 
-var builder = Host.CreateApplicationBuilder(args);
+if (File.Exists(".env"))
+{
+    Env.Load();
+}
+
+// ContentRootPath явно фіксується на папку самого exe (а не поточну робочу
+// директорію), бо WORKDIR у контейнері навмисно вказує на окрему теку для
+// даних (greenhouse.db/Photos) — інакше appsettings.json мовчки не знайдеться.
+var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory
+});
 
 builder.Services.Configure<MqttOptions>(builder.Configuration.GetSection("Mqtt"));
 builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection("Gemini"));

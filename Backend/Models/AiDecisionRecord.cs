@@ -6,6 +6,7 @@ public class AiDecisionRecord
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     public bool PumpOn { get; set; }
     public bool FanOn { get; set; }
+    public int LightBrightness { get; set; }
     public string Reason { get; set; } = string.Empty;
     public string PhotoDescription { get; set; } = string.Empty;
     public string? PhotoFileName { get; set; }

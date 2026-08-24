@@ -19,8 +19,6 @@ MqttService mqtt;
 AsyncWebServer server(80);
 
 NonBlockingTimer telemetryTimer(SENSOR_READ_INTERVAL_MS);
-NonBlockingTimer cameraTimer(CAMERA_CAPTURE_INTERVAL_MS);
-NonBlockingTimer lightTimer(LIGHT_CHECK_INTERVAL_MS);
 
 void setup() {
   Serial.begin(115200);
@@ -50,6 +48,7 @@ void setup() {
     // якась команда з мережі.
     actuators.setPump(cmd.pumpOn);
     actuators.setFan(cmd.fanOn);
+    actuators.setLight(cmd.lightBrightness);
   });
   mqtt.begin();
 
@@ -92,16 +91,6 @@ void loop() {
   mqtt.update();
   actuators.update(); // failsafe-перевірка помпи щоцикл, незалежно від таймерів
 
-  if (lightTimer.elapsed()) {
-    SensorData data = sensors.read();
-
-    if (data.lightValid) {
-      // Grow light: вмикається, коли природного світла замало, і одразу
-      // вимикається, щойно освітленість піднімається вище порогу.
-      actuators.setLight(data.lux < LIGHT_THRESHOLD_LOW);
-    }
-  }
-
   if (telemetryTimer.elapsed()) {
     SensorData data = sensors.read();
 
@@ -116,19 +105,17 @@ void loop() {
     Serial.printf("[ҐРУНТ]    Raw ADC (GPIO%d): %d | Вологість: %.1f%%\n",
                   SOIL_ADC_PIN, data.soilRaw, data.soilMoisturePct);
 
-    if (network.isConnected()) {
-      mqtt.publishTelemetry(data);
-    } else {
-      Serial.println("[MQTT] Пропуск публікації: немає Wi-Fi.");
-    }
-  }
-
-  if (cameraTimer.elapsed()) {
     int frameLen = camera.captureFrameSize();
     if (frameLen >= 0) {
       Serial.printf("[КАМЕРА]   Кадр OK (%d байт)\n", frameLen);
     } else {
       Serial.println("[КАМЕРА]   Помилка захоплення!");
+    }
+
+    if (network.isConnected()) {
+      mqtt.publishTelemetry(data);
+    } else {
+      Serial.println("[MQTT] Пропуск публікації: немає Wi-Fi.");
     }
   }
 }

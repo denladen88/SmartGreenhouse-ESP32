@@ -35,8 +35,10 @@ void MqttService::handleMessage(char* topic, uint8_t* payload, unsigned int leng
   CommandData cmd;
   cmd.pumpOn = doc["pump_on"] | false;
   cmd.fanOn = doc["fan_on"] | false;
+  cmd.lightBrightness = doc["light_brightness"] | (uint8_t)0;
 
-  Serial.printf("[MQTT] Команда: pump_on=%d, fan_on=%d\n", cmd.pumpOn, cmd.fanOn);
+  Serial.printf("[MQTT] Команда: pump_on=%d, fan_on=%d, light_brightness=%d\n",
+                cmd.pumpOn, cmd.fanOn, cmd.lightBrightness);
 
   if (_commandHandler) {
     _commandHandler(cmd);

@@ -38,13 +38,18 @@ constexpr int SOIL_RAW_DRY = 4095;
 constexpr int PUMP_RELAY_PIN = 47;
 constexpr int FAN_PIN = 21;
 
-// Grow light: адресована 24V стрічка, RGB+TW (5 каналів на піксель:
-// R,G,B,Cold White,Warm White). Adafruit_NeoPixel не підтримує 5-канальні
-// пікселі напряму — ActuatorService обходить це через сирий буфер
-// (див. коментар у ActuatorService.cpp).
+// Grow light: 24V біла стрічка (Philips Hue Lightstrip, RGB+TW), але з неї
+// використовуються лише окремі аналогові канали Cold White (C) і Warm White
+// (W) — це НЕ адресований WS2812-подібний протокол, це прямі лінії, кожна
+// вмикається/тьмяниться через власний MOSFET-модуль. Обидва TRIG/PWM входи
+// модулів сидять на одному GPIO (LIGHT_PIN) — один ШІМ-сигнал керує C і W
+// одночасно єдиною яскравістю (без окремого регулювання кольорової
+// температури). Керується виключно через MQTT-команду light_brightness
+// (0-255) — жодної локальної автоматики по датчику освітленості немає.
 #define LIGHT_PIN 45
-#define NUM_LEDS 30
-constexpr float LIGHT_THRESHOLD_LOW = 300.0f;
+constexpr int LED_PWM_CHANNEL = 4; // канали 0/timer 0 зайняті камерою (CameraService)
+constexpr int LED_PWM_FREQ_HZ = 5000;
+constexpr int LED_PWM_RESOLUTION_BITS = 8; // яскравість 0-255
 
 // Захисний ліміт: помпа автоматично вимикається, якщо працює довше цього
 // часу (запобіжник від "залипання" реле/зависання команди).
@@ -64,7 +69,6 @@ constexpr const char* MQTT_COMMANDS_TOPIC = "smartplant/commands";
 
 // ---- Інтервали циклу (неблокуючі, на базі millis()) ----
 constexpr unsigned long SENSOR_READ_INTERVAL_MS = 600000;
-constexpr unsigned long CAMERA_CAPTURE_INTERVAL_MS = 30000;
 constexpr unsigned long LIGHT_CHECK_INTERVAL_MS = 1000;
 constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 10000;
 constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;

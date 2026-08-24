@@ -8,6 +8,7 @@
 struct CommandData {
   bool pumpOn = false;
   bool fanOn = false;
+  uint8_t lightBrightness = 0; // 0-255, повністю замінює автоматику по BH1750
 };
 
 // Обгортка над PubSubClient: неблокуюче перепідключення, публікація

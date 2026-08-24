@@ -41,16 +41,47 @@ bool CameraService::begin() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
-  config.frame_size = FRAMESIZE_SVGA;
+  // UXGA (1600x1200) замість SVGA: модуль має 8MB PSRAM, тож два кадрові
+  // буфери такого розміру (~230КБ кожен у JPEG) без проблем вміщуються, а
+  // вищу роздільність AI-агроном бачить набагато детальніше на фото рослин.
+  config.frame_size = FRAMESIZE_UXGA;
   config.pixel_format = PIXFORMAT_JPEG;
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = 12;
+  config.jpeg_quality = 10; // менше число = вища якість (діапазон 0-63)
   config.fb_count = 2;
 
   esp_err_t err = esp_camera_init(&config);
   _ready = (err == ESP_OK);
-  return _ready;
+  if (!_ready) {
+    return false;
+  }
+
+  // Тюнінг сенсора OV3660: дефолтні значення драйвера розраховані на
+  // загальне використання, тут підкручуємо під нерухому предметну зйомку
+  // рослин у приміщенні (стабільне, часто штучне освітлення).
+  sensor_t* s = esp_camera_sensor_get();
+  if (s != nullptr) {
+    s->set_quality(s, config.jpeg_quality);
+    s->set_brightness(s, 0);
+    s->set_contrast(s, 1);      // трохи більше контрасту — краще видно деталі листя
+    s->set_saturation(s, 0);
+    s->set_whitebal(s, 1);
+    s->set_awb_gain(s, 1);
+    s->set_wb_mode(s, 0);       // авто-баланс білого
+    s->set_exposure_ctrl(s, 1);
+    s->set_aec2(s, 1);          // розширений AEC — стабільніша експозиція за слабкого світла
+    s->set_ae_level(s, 0);
+    s->set_gain_ctrl(s, 1);
+    s->set_agc_gain(s, 0);
+    s->set_gainceiling(s, (gainceiling_t)0);
+    s->set_bpc(s, 1);           // корекція "битих" пікселів
+    s->set_wpc(s, 1);           // корекція "білих" пікселів
+    s->set_raw_gma(s, 1);
+    s->set_lenc(s, 1);          // корекція затінення по краях об'єктива
+  }
+
+  return true;
 }
 
 int CameraService::captureFrameSize() {
