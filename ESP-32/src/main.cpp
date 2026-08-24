@@ -1,0 +1,134 @@
+#include <Arduino.h>
+#include <ESPAsyncWebServer.h>
+#include <algorithm>
+#include <cstring>
+#include <memory>
+#include "Config.h"
+#include "NonBlockingTimer.h"
+#include "SensorService.h"
+#include "CameraService.h"
+#include "ActuatorService.h"
+#include "NetworkService.h"
+#include "MqttService.h"
+
+SensorService sensors;
+CameraService camera;
+ActuatorService actuators;
+NetworkService network;
+MqttService mqtt;
+AsyncWebServer server(80);
+
+NonBlockingTimer telemetryTimer(SENSOR_READ_INTERVAL_MS);
+NonBlockingTimer cameraTimer(CAMERA_CAPTURE_INTERVAL_MS);
+NonBlockingTimer lightTimer(LIGHT_CHECK_INTERVAL_MS);
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  Serial.println("\n============================================");
+  Serial.println("  SMART PLANT ESP32-S3: CONTROLLER STARTUP  ");
+  Serial.println("============================================");
+
+  sensors.begin();
+
+  if (camera.begin()) {
+    Serial.println("[CAM] Камера готова.");
+  } else {
+    Serial.println("[CAM] Помилка ініціалізації камери!");
+  }
+
+  actuators.begin();
+
+  network.begin();
+
+  mqtt.onCommand([](const CommandData& cmd) {
+    // ActuatorService::setPump()/setFan() і так мають незалежні failsafe-
+    // таймери (перевіряються в actuators.update() щоцикл loop()) — MQTT-
+    // команда просто вмикає/вимикає той самий метод, що й уся інша логіка,
+    // тож захист спрацює автоматично незалежно від того, чи прийде ще
+    // якась команда з мережі.
+    actuators.setPump(cmd.pumpOn);
+    actuators.setFan(cmd.fanOn);
+  });
+  mqtt.begin();
+
+  server.on("/capture", HTTP_GET, [](AsyncWebServerRequest* request) {
+    const uint8_t* buf;
+    size_t len;
+    if (!camera.captureJpeg(&buf, &len)) {
+      request->send(500, "text/plain", "Camera capture failed");
+      return;
+    }
+
+    // Копіюємо кадр в окрему пам'ять і одразу звільняємо буфер камери:
+    // асинхронна відправка може тривати кілька циклів loop() вже після
+    // виходу з цього лямбда-обробника, а camera_fb_t не можна тримати
+    // зайнятим весь цей час (заблокує наступний захват кадру). shared_ptr,
+    // захоплений колбеком нижче, звільнить копію сам, коли ESPAsyncWebServer
+    // реально завершить передачу — незалежно від того, скільки це триватиме.
+    std::shared_ptr<uint8_t[]> copy(new uint8_t[len]);
+    memcpy(copy.get(), buf, len);
+    camera.releaseFrame();
+
+    AsyncWebServerResponse* response = request->beginResponse(
+        "image/jpeg", len,
+        [copy, len](uint8_t* dest, size_t maxLen, size_t index) -> size_t {
+          if (index >= len) {
+            return 0;
+          }
+          size_t chunk = std::min(maxLen, len - index);
+          memcpy(dest, copy.get() + index, chunk);
+          return chunk;
+        });
+    request->send(response);
+  });
+  server.begin();
+  Serial.println("[WEB] HTTP-сервер запущено на порту 80 (/capture).");
+}
+
+void loop() {
+  network.update();
+  mqtt.update();
+  actuators.update(); // failsafe-перевірка помпи щоцикл, незалежно від таймерів
+
+  if (lightTimer.elapsed()) {
+    SensorData data = sensors.read();
+
+    if (data.lightValid) {
+      // Grow light: вмикається, коли природного світла замало, і одразу
+      // вимикається, щойно освітленість піднімається вище порогу.
+      actuators.setLight(data.lux < LIGHT_THRESHOLD_LOW);
+    }
+  }
+
+  if (telemetryTimer.elapsed()) {
+    SensorData data = sensors.read();
+
+    Serial.println("\n--- [TELEMETRY UPDATE] ---");
+    if (data.climateValid) {
+      Serial.printf("[КЛІМАТ]  Темп: %.2f °C | Вологість: %.2f %% | Тиск: %.2f hPa\n",
+                    data.temperatureC, data.humidityPct, data.pressureHpa);
+    }
+    if (data.lightValid) {
+      Serial.printf("[СВІТЛО]   Освітленість: %.1f Lux\n", data.lux);
+    }
+    Serial.printf("[ҐРУНТ]    Raw ADC (GPIO%d): %d | Вологість: %.1f%%\n",
+                  SOIL_ADC_PIN, data.soilRaw, data.soilMoisturePct);
+
+    if (network.isConnected()) {
+      mqtt.publishTelemetry(data);
+    } else {
+      Serial.println("[MQTT] Пропуск публікації: немає Wi-Fi.");
+    }
+  }
+
+  if (cameraTimer.elapsed()) {
+    int frameLen = camera.captureFrameSize();
+    if (frameLen >= 0) {
+      Serial.printf("[КАМЕРА]   Кадр OK (%d байт)\n", frameLen);
+    } else {
+      Serial.println("[КАМЕРА]   Помилка захоплення!");
+    }
+  }
+}

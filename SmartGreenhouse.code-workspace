@@ -1,0 +1,25 @@
+{
+	"folders": [
+		{
+			"name": "ESP-32",
+			"path": "ESP-32"
+		},
+		{
+			"name": "Backend",
+			"path": "Backend"
+		}
+	],
+	"settings": {
+		"files.exclude": {
+			"**/.pio": true,
+			"**/bin": true,
+			"**/obj": true
+		},
+		"search.exclude": {
+			"**/.pio": true,
+			"**/bin": true,
+			"**/obj": true,
+			"**/greenhouse.db": true
+		}
+	}
+}

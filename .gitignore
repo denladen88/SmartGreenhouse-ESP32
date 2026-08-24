@@ -1,0 +1,3 @@
+# OS/editor cruft not already covered by ESP-32/.gitignore or Backend/.gitignore
+Thumbs.db
+.DS_Store
