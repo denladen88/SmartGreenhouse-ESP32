@@ -20,6 +20,12 @@ AsyncWebServer server(80);
 
 NonBlockingTimer telemetryTimer(SENSOR_READ_INTERVAL_MS);
 
+// Оновлюється з даних BH1750 щоцикл телеметрії; використовується і в
+// loop() (пропустити діагностичний кадр), і в обробнику /capture (не
+// віддавати фото бекенду вночі). Якщо сенсор освітленості недоступний,
+// лишаємо попереднє значення — не блокуємо камеру назавжди через збій BH1750.
+bool isNight = false;
+
 void setup() {
   Serial.begin(115200);
   delay(2000);
@@ -53,6 +59,11 @@ void setup() {
   mqtt.begin();
 
   server.on("/capture", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (isNight) {
+      request->send(204); // ніч — фото немає (без тіла відповіді)
+      return;
+    }
+
     const uint8_t* buf;
     size_t len;
     if (!camera.captureJpeg(&buf, &len)) {
@@ -101,15 +112,20 @@ void loop() {
     }
     if (data.lightValid) {
       Serial.printf("[СВІТЛО]   Освітленість: %.1f Lux\n", data.lux);
+      isNight = data.lux < NIGHT_LUX_THRESHOLD;
     }
     Serial.printf("[ҐРУНТ]    Raw ADC (GPIO%d): %d | Вологість: %.1f%%\n",
                   SOIL_ADC_PIN, data.soilRaw, data.soilMoisturePct);
 
-    int frameLen = camera.captureFrameSize();
-    if (frameLen >= 0) {
-      Serial.printf("[КАМЕРА]   Кадр OK (%d байт)\n", frameLen);
+    if (isNight) {
+      Serial.println("[КАМЕРА]   Ніч — кадр не знімається.");
     } else {
-      Serial.println("[КАМЕРА]   Помилка захоплення!");
+      int frameLen = camera.captureFrameSize();
+      if (frameLen >= 0) {
+        Serial.printf("[КАМЕРА]   Кадр OK (%d байт)\n", frameLen);
+      } else {
+        Serial.println("[КАМЕРА]   Помилка захоплення!");
+      }
     }
 
     if (network.isConnected()) {

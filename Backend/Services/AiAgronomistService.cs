@@ -143,29 +143,44 @@ public class AiAgronomistService : BackgroundService
             return;
         }
 
-        var base64Image = Convert.ToBase64String(imageBytes);
+        // ESP32 повертає 204 без тіла вночі (замало світла для корисного кадру) —
+        // GetByteArrayAsync у такому разі не кидає виняток, а віддає порожній масив.
+        var hasPhoto = imageBytes.Length > 0;
+        var base64Image = hasPhoto ? Convert.ToBase64String(imageBytes) : null;
 
         string? photoFileName = null;
-        try
+        if (hasPhoto)
         {
-            Directory.CreateDirectory(PhotosDirectory);
-            photoFileName = $"{DateTime.UtcNow:yyyyMMdd_HHmmss}.jpg";
-            await File.WriteAllBytesAsync(Path.Combine(PhotosDirectory, photoFileName), imageBytes, stoppingToken);
+            try
+            {
+                Directory.CreateDirectory(PhotosDirectory);
+                photoFileName = $"{DateTime.UtcNow:yyyyMMdd_HHmmss}.jpg";
+                await File.WriteAllBytesAsync(Path.Combine(PhotosDirectory, photoFileName), imageBytes, stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to save AI cycle photo to disk");
+                photoFileName = null;
+            }
         }
-        catch (Exception ex)
+        else
         {
-            _logger.LogWarning(ex, "Failed to save AI cycle photo to disk");
-            photoFileName = null;
+            _logger.LogInformation("No photo available from ESP32 camera this cycle (nighttime) — analyzing sensor trend only");
         }
 
         var plantProfile = string.IsNullOrWhiteSpace(_plantOptions.CareNotes)
             ? string.Empty
             : $"Plant profile — {_plantOptions.Name}: {_plantOptions.CareNotes}\n\n";
 
+        var photoInstruction = hasPhoto
+            ? "Analyze this plant photo together with the sensor trend below, using the plant profile to judge what is " +
+              "actually normal or concerning for this specific species — not generic assumptions. "
+            : "No photo was available this cycle (the camera doesn't capture at night, when ambient light is too low for a " +
+              "useful frame) — base your analysis on the sensor trend and plant profile alone; leave PhotoDescription empty. ";
+
         var prompt =
             $"You are an AI Agronomist managing a greenhouse growing {_plantOptions.Name}. " +
-            "Analyze this plant photo together with the sensor trend below, using the plant profile to judge what is " +
-            "actually normal or concerning for this specific species — not generic assumptions. " +
+            photoInstruction +
             "Pay attention to the RATE of change over time (e.g. how fast the soil is drying out or the temperature is rising), " +
             "not just the latest snapshot.\n\n" +
             $"Current local time: {DateTime.Now:yyyy-MM-dd HH:mm} ({DateTime.Now:dddd}).\n\n" +
@@ -198,18 +213,17 @@ public class AiAgronomistService : BackgroundService
             "int (0-255), \"Reason\": \"short explanation referencing the trend\", \"PhotoDescription\": \"what you see " +
             "in the photo\" } without markdown code blocks.";
 
+        var parts = new List<object> { new { text = prompt } };
+        if (hasPhoto)
+        {
+            parts.Add(new { inline_data = new { mime_type = "image/jpeg", data = base64Image } });
+        }
+
         var requestBody = new
         {
             contents = new[]
             {
-                new
-                {
-                    parts = new object[]
-                    {
-                        new { text = prompt },
-                        new { inline_data = new { mime_type = "image/jpeg", data = base64Image } }
-                    }
-                }
+                new { parts = parts.ToArray() }
             },
             generationConfig = new
             {

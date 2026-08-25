@@ -67,6 +67,11 @@ constexpr const char* MQTT_TELEMETRY_TOPIC = "smartplant/telemetry";
 constexpr const char* MQTT_STATUS_TOPIC = "smartplant/status";
 constexpr const char* MQTT_COMMANDS_TOPIC = "smartplant/commands";
 
+// Нижче цього рівня освітленості (за показом BH1750) вважаємо, що зараз ніч
+// — камера не знімає кадр і /capture нічого не віддає (все одно чорний кадр,
+// шкода лише трафіку/дискового місця/токенів AI-аналізу на боці бекенда).
+constexpr float NIGHT_LUX_THRESHOLD = 5.0f;
+
 // ---- Інтервали циклу (неблокуючі, на базі millis()) ----
 constexpr unsigned long SENSOR_READ_INTERVAL_MS = 600000;
 constexpr unsigned long LIGHT_CHECK_INTERVAL_MS = 1000;
