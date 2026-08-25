@@ -233,18 +233,65 @@ public class AiAgronomistService : BackgroundService
 
         var url = $"https://generativelanguage.googleapis.com/v1beta/models/{_geminiOptions.Model}:generateContent";
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        // Gemini occasionally returns 503/429 when its servers are overloaded — these are
+        // transient on Google's side, not a problem with our request, so retry a few times
+        // with backoff before giving up and letting the cycle fail for real.
+        const int maxAttempts = 3;
+        var retryDelay = TimeSpan.FromSeconds(5);
+        HttpResponseMessage response;
+        for (int attempt = 1; ; attempt++)
         {
-            Content = JsonContent.Create(requestBody)
-        };
-        request.Headers.Add("x-goog-api-key", _geminiOptions.ApiKey);
+            using var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(requestBody)
+            };
+            request.Headers.Add("x-goog-api-key", _geminiOptions.ApiKey);
 
-        _logger.LogInformation("Dispatching request to Gemini model {Model}", _geminiOptions.Model);
+            _logger.LogInformation("Dispatching request to Gemini model {Model} (attempt {Attempt}/{MaxAttempts})",
+                _geminiOptions.Model, attempt, maxAttempts);
 
-        using var response = await _httpClient.SendAsync(request, stoppingToken);
-        response.EnsureSuccessStatusCode();
+            try
+            {
+                response = await _httpClient.SendAsync(request, stoppingToken);
+            }
+            catch (Exception ex) when ((ex is HttpRequestException or TaskCanceledException) &&
+                !stoppingToken.IsCancellationRequested && attempt < maxAttempts)
+            {
+                // Network-level failure (timeout, connection reset) before we even got a response —
+                // just as retryable as a transient 5xx, but SendAsync throws instead of returning one.
+                _logger.LogWarning(ex,
+                    "Gemini request threw {ExceptionType} (attempt {Attempt}/{MaxAttempts}), retrying in {Delay}",
+                    ex.GetType().Name, attempt, maxAttempts, retryDelay);
+                await Task.Delay(retryDelay, stoppingToken);
+                retryDelay *= 2;
+                continue;
+            }
+
+            var isTransientError = !response.IsSuccessStatusCode &&
+                (int)response.StatusCode is 429 or 500 or 502 or 503 or 504;
+            if (!isTransientError || attempt >= maxAttempts)
+            {
+                break;
+            }
+
+            _logger.LogWarning(
+                "Gemini request failed with {StatusCode} (attempt {Attempt}/{MaxAttempts}), retrying in {Delay}",
+                response.StatusCode, attempt, maxAttempts, retryDelay);
+            response.Dispose();
+            await Task.Delay(retryDelay, stoppingToken);
+            retryDelay *= 2;
+        }
 
         var rawBody = await response.Content.ReadAsStringAsync(stoppingToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("Gemini request failed with {StatusCode}, response body: {Body}",
+                response.StatusCode, rawBody);
+        }
+
+        response.EnsureSuccessStatusCode();
+        response.Dispose();
         _logger.LogDebug("Raw Gemini response: {RawBody}", rawBody);
 
         var geminiResponse = JsonSerializer.Deserialize<GeminiGenerateContentResponse>(rawBody);

@@ -18,13 +18,19 @@ NetworkService network;
 MqttService mqtt;
 AsyncWebServer server(80);
 
-NonBlockingTimer telemetryTimer(SENSOR_READ_INTERVAL_MS);
+NonBlockingTimer sensorReadTimer(SENSOR_READ_INTERVAL_MS);
+NonBlockingTimer mqttPublishTimer(MQTT_PUBLISH_INTERVAL_MS);
 
-// Оновлюється з даних BH1750 щоцикл телеметрії; використовується і в
+// Оновлюється з даних BH1750 щоцикл читання сенсорів; використовується і в
 // loop() (пропустити діагностичний кадр), і в обробнику /capture (не
 // віддавати фото бекенду вночі). Якщо сенсор освітленості недоступний,
 // лишаємо попереднє значення — не блокуємо камеру назавжди через збій BH1750.
 bool isNight = false;
+
+// Останнє зчитане показання сенсорів — читаємо й логуємо частіше
+// (SENSOR_READ_INTERVAL_MS), ніж публікуємо в MQTT (MQTT_PUBLISH_INTERVAL_MS),
+// тож публікація бере останній збережений результат, а не читає повторно.
+SensorData lastSensorData;
 
 void setup() {
   Serial.begin(115200);
@@ -102,21 +108,23 @@ void loop() {
   mqtt.update();
   actuators.update(); // failsafe-перевірка помпи щоцикл, незалежно від таймерів
 
-  if (telemetryTimer.elapsed()) {
-    SensorData data = sensors.read();
+  if (sensorReadTimer.elapsed()) {
+    lastSensorData = sensors.read();
 
-    Serial.println("\n--- [TELEMETRY UPDATE] ---");
-    if (data.climateValid) {
+    Serial.println("\n--- [SENSOR READ] ---");
+    if (lastSensorData.climateValid) {
       Serial.printf("[КЛІМАТ]  Темп: %.2f °C | Вологість: %.2f %% | Тиск: %.2f hPa\n",
-                    data.temperatureC, data.humidityPct, data.pressureHpa);
+                    lastSensorData.temperatureC, lastSensorData.humidityPct, lastSensorData.pressureHpa);
     }
-    if (data.lightValid) {
-      Serial.printf("[СВІТЛО]   Освітленість: %.1f Lux\n", data.lux);
-      isNight = data.lux < NIGHT_LUX_THRESHOLD;
+    if (lastSensorData.lightValid) {
+      Serial.printf("[СВІТЛО]   Освітленість: %.1f Lux\n", lastSensorData.lux);
+      isNight = lastSensorData.lux < NIGHT_LUX_THRESHOLD;
     }
     Serial.printf("[ҐРУНТ]    Raw ADC (GPIO%d): %d | Вологість: %.1f%%\n",
-                  SOIL_ADC_PIN, data.soilRaw, data.soilMoisturePct);
+                  SOIL_ADC_PIN, lastSensorData.soilRaw, lastSensorData.soilMoisturePct);
+  }
 
+  if (mqttPublishTimer.elapsed()) {
     if (isNight) {
       Serial.println("[КАМЕРА]   Ніч — кадр не знімається.");
     } else {
@@ -129,7 +137,7 @@ void loop() {
     }
 
     if (network.isConnected()) {
-      mqtt.publishTelemetry(data);
+      mqtt.publishTelemetry(lastSensorData);
     } else {
       Serial.println("[MQTT] Пропуск публікації: немає Wi-Fi.");
     }

@@ -73,7 +73,11 @@ constexpr const char* MQTT_COMMANDS_TOPIC = "smartplant/commands";
 constexpr float NIGHT_LUX_THRESHOLD = 5.0f;
 
 // ---- Інтервали циклу (неблокуючі, на базі millis()) ----
-constexpr unsigned long SENSOR_READ_INTERVAL_MS = 600000;
+// Читання/лог сенсорів і публікація в MQTT навмисно розведені: читаємо й
+// логуємо часто (для живого спостереження в Serial), а публікуємо в MQTT
+// рідше (щоб не заливати брокер/БД телеметрії зайвими точками).
+constexpr unsigned long SENSOR_READ_INTERVAL_MS = 60000;
+constexpr unsigned long MQTT_PUBLISH_INTERVAL_MS = 600000;
 constexpr unsigned long LIGHT_CHECK_INTERVAL_MS = 1000;
 constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 10000;
 constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;

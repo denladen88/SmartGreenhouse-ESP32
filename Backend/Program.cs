@@ -28,7 +28,9 @@ builder.Services.AddDbContext<AppDbContext>();
 
 builder.Services.AddHttpClient(nameof(AiAgronomistService), client =>
 {
-    client.Timeout = TimeSpan.FromSeconds(30);
+    // Shared by the fast ESP32 /capture GET and the slower Gemini vision POST (image + prompt) —
+    // 30s was cutting it close for Gemini now that photos are larger (UXGA capture).
+    client.Timeout = TimeSpan.FromSeconds(45);
 });
 
 builder.Services.AddSingleton<MqttBackgroundService>();
