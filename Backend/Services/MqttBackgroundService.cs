@@ -47,8 +47,14 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
 
         _mqttClient.ApplicationMessageReceivedAsync += HandleMessageReceivedAsync;
 
-        await _mqttClient.SubscribeAsync(_options.Topic);
+        // ВАЖЛИВО: підписуватись можна лише ПІСЛЯ StartAsync — виклик у зворотному
+        // порядку (як було раніше) залишав підписку в дивному стані, через що
+        // внутрішній reconnect-цикл ManagedMqttClient раз у раз "перепідтверджував"
+        // її, і кожне єдине повідомлення з ESP32 в результаті оброблялось і
+        // зберігалось у базу сотні разів поспіль (спостерігалось ~500x дублів на
+        // один пакет телеметрії).
         await _mqttClient.StartAsync(managedOptions);
+        await _mqttClient.SubscribeAsync(_options.Topic);
 
         _logger.LogInformation("MQTT client started, connecting to {Server}:{Port}, subscribed to {Topic}",
             _options.Server, _options.Port, _options.Topic);

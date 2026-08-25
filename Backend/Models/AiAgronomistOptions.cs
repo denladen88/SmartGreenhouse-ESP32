@@ -2,8 +2,54 @@ namespace SmartGreenhouse.Backend.Models;
 
 public class AiAgronomistOptions
 {
-    public int PollIntervalMinutes { get; set; } = 60;
-    public int TrendWindowMinutes { get; set; } = 360;
-    public int TrendBucketMinutes { get; set; } = 5;
+    // Як часто Gemini "по плану" переглядає фото+тренд і переписує ідеальний
+    // профіль рослини (PlantProfile) — не рішення актуаторів, ними керує
+    // локальний контролер (AiAgronomistService.RunLocalControlAsync).
+    public int ProfileAnalysisIntervalMinutes { get; set; } = 1440;
+
+    public int TrendWindowMinutes { get; set; } = 1440;
+    public int TrendBucketMinutes { get; set; } = 60;
+
+    // Скільки згрупованих сегментів історії актуаторів (SummarizeActuatorHistory)
+    // показувати Gemini в промпті.
     public int DecisionHistoryCount { get; set; } = 5;
+
+    // Lux рівень, що вважається "ефективним" ростовим світлом (сонце і/або
+    // grow light разом) — використовується і для підрахунку годин світла за
+    // добу, і локальним правилом підсвітки як поріг "замало ambient light".
+    // Орієнтовне значення, може знадобитись відкалібрувати під реальні покази
+    // BH1750 у вашій теплиці.
+    public double GrowthLuxThreshold { get; set; } = 1000.0;
+
+    // Мінімальний проміжок між будь-якими двома аналізами профілю (плановим чи
+    // позачерговим) — запобіжник, щоб DetectSustainedAnomalyAsync не закидав
+    // Gemini запитами, поки аномалія триває годинами.
+    public int MinMinutesBetweenCycles { get; set; } = 30;
+
+    // Тік і для перевірки "чи не пора проаналізувати профіль" (плановий чи
+    // позачерговий), і для окремого циклу локального контролера актуаторів.
+    // Прив'язано до реального темпу надходження телеметрії з ESP32
+    // (MQTT_PUBLISH_INTERVAL_MS=10 хв у прошивці) — частіше перевіряти немає
+    // сенсу, нових даних все одно не буде.
+    public int LocalControlIntervalMinutes { get; set; } = 10;
+
+    // Вікно, за яке дивимось на телеметрію, шукаючи стійке (не одноразове)
+    // відхилення Temp/Humidity/SoilMoisture за межі PlantProfile — тригер для
+    // позачергового аналізу профілю.
+    public int SustainedExcursionMinutes { get; set; } = 30;
+
+    // Вікно для локального правила помпи: шукаємо спадний тренд вологості
+    // ґрунту саме в цих межах.
+    public int SoilMoistureTrendWindowMinutes { get; set; } = 30;
+
+    // Запобіжник від перезапуску поливу щотіку локального контролера, поки
+    // ґрунт лишається сухим — базилік дуже вразливий до кореневої гнилі від
+    // перезволоження (див. Plant:CareNotes).
+    public int MinMinutesBetweenWaterings { get; set; } = 60;
+
+    // Прості межі "дня" для локального правила підсвітки — раніше Gemini сам
+    // оцінював день/ніч по місцевому часу й Lux щоразу, локальному правилу
+    // потрібна явна межа.
+    public int DaytimeStartHour { get; set; } = 6;
+    public int DaytimeEndHour { get; set; } = 20;
 }

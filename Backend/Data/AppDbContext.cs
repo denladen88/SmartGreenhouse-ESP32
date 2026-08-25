@@ -7,6 +7,7 @@ public class AppDbContext : DbContext
 {
     public DbSet<TelemetryRecord> Telemetries => Set<TelemetryRecord>();
     public DbSet<AiDecisionRecord> AiDecisions => Set<AiDecisionRecord>();
+    public DbSet<PlantProfile> PlantProfiles => Set<PlantProfile>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
