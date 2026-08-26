@@ -47,9 +47,13 @@ public class AiAgronomistOptions
     // перезволоження (див. Plant:CareNotes).
     public int MinMinutesBetweenWaterings { get; set; } = 60;
 
-    // Прості межі "дня" для локального правила підсвітки — раніше Gemini сам
-    // оцінював день/ніч по місцевому часу й Lux щоразу, локальному правилу
-    // потрібна явна межа.
-    public int DaytimeStartHour { get; set; } = 6;
-    public int DaytimeEndHour { get; set; } = 20;
+    // Гарантований нічний "відпочинок" без підсвітки, незалежно від того,
+    // скільки годин світла ще недобрано за добу — рослині шкідливо тримати
+    // світло цілодобово. Може огортати північ (StartHour > EndHour, як у
+    // дефолті 23->5). ПОЗА цим вікном контролер намагається добрати денну
+    // норму (PlantProfile.DailyLightHoursTarget), а не зупиняється по
+    // жорсткому "денному" годиннику — інакше при хмарному дні чи короткому
+    // денному вікні норма просто ніколи не набирається.
+    public int NightRestStartHour { get; set; } = 23;
+    public int NightRestEndHour { get; set; } = 5;
 }

@@ -176,6 +176,18 @@ public class AiAgronomistService : BackgroundService
             $"{points.Min():0.#}-{points.Max():0.#}{suffix}).";
     }
 
+    // Останній реально опублікований стан актуаторів (з AiDecisions — байдуже,
+    // від локального контролера чи від будь-чого іншого) — щоб примусове
+    // вмикання світла для нічного фото не зачепило pump/fan і щоб потім було
+    // куди повертати світло назад.
+    private async Task<(bool PumpOn, bool FanOn, int LightBrightness)> GetLatestActuatorStateAsync(CancellationToken stoppingToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var latest = await db.AiDecisions.OrderByDescending(d => d.Timestamp).FirstOrDefaultAsync(stoppingToken);
+        return latest is null ? (false, false, 0) : (latest.PumpOn, latest.FanOn, latest.LightBrightness);
+    }
+
     private async Task RunProfileAnalysisAsync(CancellationToken stoppingToken, string? earlyTriggerReason)
     {
         var trendWindow = TimeSpan.FromMinutes(_agronomistOptions.TrendWindowMinutes);
@@ -235,8 +247,6 @@ public class AiAgronomistService : BackgroundService
         try
         {
             imageBytes = await _httpClient.GetByteArrayAsync(_esp32Options.CameraUrl, stoppingToken);
-            _logger.LogInformation("Downloaded {ByteCount} bytes from ESP32 camera at {CameraUrl}",
-                imageBytes.Length, _esp32Options.CameraUrl);
         }
         catch (Exception ex)
         {
@@ -244,8 +254,41 @@ public class AiAgronomistService : BackgroundService
             return;
         }
 
-        // ESP32 повертає 204 без тіла вночі (замало світла для корисного кадру) —
-        // GetByteArrayAsync у такому разі не кидає виняток, а віддає порожній масив.
+        // ESP32 повертає 204 без тіла, якщо сам вважає, що зараз ніч (замало Lux
+        // для корисного кадру) — GetByteArrayAsync у такому разі не кидає виняток,
+        // а віддає порожній масив. Замість того щоб змиритись з відсутністю фото,
+        // примусово вмикаємо підсвітку на максимум, чекаємо, поки прошивка сама це
+        // помітить (isNight оновлюється раз на SENSOR_READ_INTERVAL_MS=60с у
+        // прошивці — чекаємо з запасом), і пробуємо ще раз. Після знімку одразу
+        // повертаємо світло (і pump/fan) до того стану, який реально був до цього,
+        // а не лишаємо ввімкненим до наступного тіку локального контролера.
+        if (imageBytes.Length == 0)
+        {
+            var previousDecision = await GetLatestActuatorStateAsync(stoppingToken);
+
+            _logger.LogInformation("No photo (likely night per ESP32) — forcing grow light on for a proper shot and retrying");
+            await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, 255)));
+
+            await Task.Delay(TimeSpan.FromSeconds(65), stoppingToken);
+
+            try
+            {
+                imageBytes = await _httpClient.GetByteArrayAsync(_esp32Options.CameraUrl, stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Retry photo capture after forcing light on failed");
+                imageBytes = Array.Empty<byte>();
+            }
+
+            await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.LightBrightness)));
+        }
+
+        _logger.LogInformation("Downloaded {ByteCount} bytes from ESP32 camera at {CameraUrl}",
+            imageBytes.Length, _esp32Options.CameraUrl);
+
         var hasPhoto = imageBytes.Length > 0;
         var base64Image = hasPhoto ? Convert.ToBase64String(imageBytes) : null;
 
@@ -295,8 +338,10 @@ public class AiAgronomistService : BackgroundService
             "moisture (as a calibrated 0-100% reading, 100% = fully wet — this sensor's raw ADC value drifts, judge the " +
             "range from the trend shape and actuator history above, not just a snapshot), and how many hours of effective " +
             "light (sun and/or grow light combined) it needs per day. These ranges will be used directly by simple automated " +
-            "rules — not by you — to control the pump, fan, and grow light until your next review, so make them realistic " +
-            "operating ranges, not aspirational extremes. Reply strictly in JSON matching this schema: { \"TempMinC\": " +
+            "rules — not by you — to control the pump, fan, and grow light until your next review: the fan turns on when " +
+            "temperature is sustained above TempMaxC OR humidity is sustained above HumidityMaxPct (so HumidityMaxPct " +
+            "directly controls ventilation, not just an alert threshold), so make all ranges realistic operating targets, " +
+            "not aspirational extremes. Reply strictly in JSON matching this schema: { \"TempMinC\": " +
             "number, \"TempMaxC\": number, \"HumidityMinPct\": number, \"HumidityMaxPct\": number, \"SoilMoistureMinPct\": " +
             "number, \"SoilMoistureMaxPct\": number, \"DailyLightHoursTarget\": number, \"Notes\": \"short rationale, " +
             "referencing what changed since last time if applicable\" } without markdown code blocks.";
@@ -447,6 +492,13 @@ public class AiAgronomistService : BackgroundService
             .Select(t => t.TemperatureC!.Value)
             .ToListAsync(stoppingToken);
 
+        var recentHumidity = await db.Telemetries
+            .Where(t => t.HumidityPct != null)
+            .OrderByDescending(t => t.Timestamp)
+            .Take(MinSustainedReadings)
+            .Select(t => t.HumidityPct!.Value)
+            .ToListAsync(stoppingToken);
+
         var todayStartUtc = DateTime.Now.Date.ToUniversalTime();
         var todayLightRecords = await db.Telemetries
             .Where(t => t.Timestamp >= todayStartUtc)
@@ -454,17 +506,36 @@ public class AiAgronomistService : BackgroundService
             .Select(t => new TelemetryRecord { Timestamp = t.Timestamp, Lux = t.Lux })
             .ToListAsync(stoppingToken);
 
+        var todayLightDecisions = await db.AiDecisions
+            .Where(d => d.Timestamp >= todayStartUtc)
+            .OrderBy(d => d.Timestamp)
+            .ToListAsync(stoppingToken);
+
         var latestLux = await db.Telemetries
             .OrderByDescending(t => t.Timestamp)
             .Select(t => t.Lux)
             .FirstOrDefaultAsync(stoppingToken);
 
-        // Вентилятор: усі останні MinSustainedReadings точки вище максимуму — не одна.
-        var fanOn = recentTemps.Count >= MinSustainedReadings && recentTemps.All(t => t > profile.TempMaxC);
-        var fanReason = fanOn
-            ? $"Temp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C > max {profile.TempMaxC:0.#}C " +
-              $"({recentTemps.Count} readings) -> On"
-            : $"Temp within {profile.TempMaxC:0.#}C max -> Off";
+        // Вентилятор: перегрів АБО стійко висока вологість повітря — усі останні
+        // MinSustainedReadings точки вище відповідного максимуму, не одна. Раніше
+        // вентилятор реагував лише на температуру, хоча Gemini в нотатках профілю
+        // явно розраховує на провітрювання й від вологості теж (наприклад, щоб
+        // просушити повітря після поливу чи вночі при конденсації).
+        var tempTooHigh = recentTemps.Count >= MinSustainedReadings && recentTemps.All(t => t > profile.TempMaxC);
+        var humidityTooHigh = recentHumidity.Count >= MinSustainedReadings && recentHumidity.All(h => h > profile.HumidityMaxPct);
+        var fanOn = tempTooHigh || humidityTooHigh;
+
+        var fanReason = (tempTooHigh, humidityTooHigh) switch
+        {
+            (true, true) => $"Temp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C > max " +
+                $"{profile.TempMaxC:0.#}C AND Humidity {string.Join("/", recentHumidity.Select(h => h.ToString("0.#")))}% " +
+                $"> max {profile.HumidityMaxPct:0.#}% -> On",
+            (true, false) => $"Temp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C > max " +
+                $"{profile.TempMaxC:0.#}C ({recentTemps.Count} readings) -> On",
+            (false, true) => $"Humidity {string.Join("/", recentHumidity.Select(h => h.ToString("0.#")))}% > max " +
+                $"{profile.HumidityMaxPct:0.#}% ({recentHumidity.Count} readings) -> On",
+            _ => $"Temp within {profile.TempMaxC:0.#}C max, Humidity within {profile.HumidityMaxPct:0.#}% max -> Off"
+        };
 
         // Помпа: вологість спадає і вже нижче мінімуму, плюс не поливали нещодавно
         // (запобіжник від кореневої гнилі базиліка — див. Plant:CareNotes).
@@ -490,19 +561,28 @@ public class AiAgronomistService : BackgroundService
                       "min -> Off (cooldown)"
                     : $"SoilMoisture {soilPoints[^1]:0.#}% < min {profile.SoilMoistureMinPct:0.#}% and declining -> On";
 
-        // Світло: тільки в "денні" години, коли ambient Lux не дотягує до порогу і
-        // денна норма годин світла ще не вибрана.
-        var lightHoursSoFarToday = EstimateLightHours(todayLightRecords, _agronomistOptions.GrowthLuxThreshold);
+        // Світло: рахуємо ГОДИНИ, коли рослина реально отримувала світло — і від
+        // сонця (ambient Lux >= порогу), і від самого grow light (коли він був
+        // увімкнений). Ці два джерела не перетинаються за побудовою: підсвітка
+        // вмикається лише тоді, коли ambient нижче порогу, тож подвійний підрахунок
+        // неможливий. Без цього grow light міг світити годинами, а лічильник
+        // денної норми майже не зрушувався б (grow light рідко піднімає покази
+        // BH1750 до GrowthLuxThreshold).
+        var lightHoursSoFarToday = EstimateLightHours(todayLightRecords, _agronomistOptions.GrowthLuxThreshold) +
+            EstimateGrowLightHours(todayLightDecisions);
+
         var hour = DateTime.Now.Hour;
-        var isDaytime = hour >= _agronomistOptions.DaytimeStartHour && hour < _agronomistOptions.DaytimeEndHour;
+        var isNightRest = _agronomistOptions.NightRestStartHour > _agronomistOptions.NightRestEndHour
+            ? hour >= _agronomistOptions.NightRestStartHour || hour < _agronomistOptions.NightRestEndHour
+            : hour >= _agronomistOptions.NightRestStartHour && hour < _agronomistOptions.NightRestEndHour;
         var ambientLux = latestLux ?? 0;
 
         int lightBrightness;
         string lightReason;
-        if (!isDaytime)
+        if (isNightRest)
         {
             lightBrightness = 0;
-            lightReason = $"Outside daytime hours ({_agronomistOptions.DaytimeStartHour}-{_agronomistOptions.DaytimeEndHour}) -> Off";
+            lightReason = $"Night rest period ({_agronomistOptions.NightRestStartHour}-{_agronomistOptions.NightRestEndHour}) -> Off";
         }
         else if (lightHoursSoFarToday >= profile.DailyLightHoursTarget)
         {
@@ -517,8 +597,8 @@ public class AiAgronomistService : BackgroundService
         else
         {
             var shortfall = (_agronomistOptions.GrowthLuxThreshold - ambientLux) / _agronomistOptions.GrowthLuxThreshold;
-            lightBrightness = (int)Math.Clamp(shortfall * 255, 0, 255);
-            lightReason = $"Daytime, ambient {ambientLux:0}lx < {_agronomistOptions.GrowthLuxThreshold:0}lx threshold, " +
+            lightBrightness = (int)Math.Round(Math.Clamp(shortfall * 255, 0, 255));
+            lightReason = $"Outside night rest, ambient {ambientLux:0}lx < {_agronomistOptions.GrowthLuxThreshold:0}lx threshold, " +
                 $"{lightHoursSoFarToday:0.#}h/{profile.DailyLightHoursTarget:0.#}h today -> {lightBrightness}";
         }
 
@@ -626,11 +706,14 @@ public class AiAgronomistService : BackgroundService
         return text;
     }
 
-    // Підсумовує, скільки годин сьогодні Lux тримався на рівні "ефективного" ростового
-    // світла (сонце і/або grow light разом — BH1750 бачить обидва джерела). Кожен
-    // інтервал між сусідніми точками рахується як "освітлений", якщо його стартова
-    // точка була вище порогу; інтервал обрізається до 15 хв, щоб простій пристрою
-    // (Wi-Fi/MQTT відвалились на години) не зарахувався як багатогодинне освітлення.
+    // Підсумовує, скільки годин сьогодні ambient Lux (природне світло) сам по собі
+    // тримався на рівні "ефективного" ростового освітлення. На практиці grow light
+    // навіть на високій яскравості рідко піднімає покази BH1750 до GrowthLuxThreshold
+    // — тому години активної підсвітки рахує окремо EstimateGrowLightHours, а тут
+    // лише природне світло. Кожен інтервал між сусідніми точками рахується як
+    // "освітлений", якщо його стартова точка була вище порогу; інтервал обрізається
+    // до 15 хв, щоб простій пристрою (Wi-Fi/MQTT відвалились на години) не
+    // зарахувався як багатогодинне освітлення.
     private static double EstimateLightHours(List<TelemetryRecord> chronologicalRecords, double luxThreshold)
     {
         var cap = TimeSpan.FromMinutes(15);
@@ -644,6 +727,35 @@ public class AiAgronomistService : BackgroundService
             }
 
             var gap = chronologicalRecords[i + 1].Timestamp - current.Timestamp;
+            if (gap < TimeSpan.Zero)
+            {
+                continue;
+            }
+
+            hours += (gap > cap ? cap : gap).TotalHours;
+        }
+
+        return hours;
+    }
+
+    // Той самий принцип, що й EstimateLightHours, але за історією рішень
+    // локального контролера: рахує години, коли grow light сам був увімкнений
+    // (LightBrightness > 0). За побудовою правила світла ці інтервали не
+    // перетинаються з інтервалами EstimateLightHours (підсвітка вмикається лише
+    // коли ambient нижче порогу), тож суму двох можна брати без подвійного обліку.
+    private static double EstimateGrowLightHours(List<AiDecisionRecord> chronologicalDecisions)
+    {
+        var cap = TimeSpan.FromMinutes(15);
+        double hours = 0;
+        for (int i = 0; i < chronologicalDecisions.Count - 1; i++)
+        {
+            var current = chronologicalDecisions[i];
+            if (current.LightBrightness <= 0)
+            {
+                continue;
+            }
+
+            var gap = chronologicalDecisions[i + 1].Timestamp - current.Timestamp;
             if (gap < TimeSpan.Zero)
             {
                 continue;
