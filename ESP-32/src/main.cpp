@@ -61,6 +61,7 @@ void setup() {
     actuators.setPump(cmd.pumpOn);
     actuators.setFan(cmd.fanOn);
     actuators.setLight(cmd.lightBrightness);
+    actuators.setSoilHeater(cmd.soilHeaterPower);
   });
   mqtt.begin();
 
@@ -122,6 +123,9 @@ void loop() {
     }
     Serial.printf("[ҐРУНТ]    Raw ADC (GPIO%d): %d | Вологість: %.1f%%\n",
                   SOIL_ADC_PIN, lastSensorData.soilRaw, lastSensorData.soilMoisturePct);
+    if (lastSensorData.soilTempValid) {
+      Serial.printf("[ҐРУНТ]    Температура: %.1f °C\n", lastSensorData.soilTempC);
+    }
   }
 
   if (mqttPublishTimer.elapsed()) {

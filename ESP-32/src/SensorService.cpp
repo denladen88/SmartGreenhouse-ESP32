@@ -27,7 +27,20 @@ bool SensorService::begin() {
     Serial.println("[BH1750] Помилка: BH1750 не знайдено!");
   }
 
-  return _hasBme || _hasBh1750;
+  _oneWire.begin(SOIL_TEMP_ONEWIRE_PIN);
+  _dallasTemp.begin();
+  // 9-біт (крок 0.5°C) замість дефолтних 12-біт: конверсія займає ~94мс
+  // замість ~750мс — read() блокує loop() лише на цей час раз на
+  // SENSOR_READ_INTERVAL_MS, точність 0.5°C для ґрунту цілком достатня.
+  _dallasTemp.setResolution(9);
+  _hasSoilTemp = _dallasTemp.getDeviceCount() > 0;
+  if (_hasSoilTemp) {
+    Serial.println("[DS18B20] Ґрунтовий термодатчик готовий.");
+  } else {
+    Serial.println("[DS18B20] Помилка: датчик не знайдено на OneWire-шині!");
+  }
+
+  return _hasBme || _hasBh1750 || _hasSoilTemp;
 }
 
 SensorData SensorService::read() {
@@ -101,6 +114,17 @@ SensorData SensorService::read() {
   // змінити пізніше без переписування логіки.
   float pct = 100.0f * (float)(SOIL_RAW_DRY - data.soilRaw) / (float)(SOIL_RAW_DRY - SOIL_RAW_WET);
   data.soilMoisturePct = constrain(pct, 0.0f, 100.0f);
+
+  if (_hasSoilTemp) {
+    _dallasTemp.requestTemperatures();
+    float t = _dallasTemp.getTempCByIndex(0);
+    if (t != DEVICE_DISCONNECTED_C) {
+      data.soilTempValid = true;
+      data.soilTempC = t;
+    } else {
+      Serial.println("[DS18B20] Датчик не відповів під час читання.");
+    }
+  }
 
   return data;
 }

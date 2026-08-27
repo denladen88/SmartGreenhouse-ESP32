@@ -34,6 +34,30 @@ constexpr int ADC_RESOLUTION_BITS = 12;
 constexpr int SOIL_RAW_WET = 1270;
 constexpr int SOIL_RAW_DRY = 4095;
 
+// ---- Ґрунтовий термодатчик (DS18B20, OneWire) ----
+// GPIO38: перший вільний пін поза зайнятими — камера тримає 4-13/15-18,
+// I2C-шина сенсорів 1-2, аналоговий вхід ґрунту 3, актуатори 21/45/47; на
+// цьому модулі (N16R8, октальна PSRAM/flash) GPIO26-37 зайняті внутрішньою
+// шиною пам'яті, тож 38+ — перший безпечний діапазон для нової периферії.
+constexpr int SOIL_TEMP_ONEWIRE_PIN = 38;
+
+// ---- Підігрів ґрунту (DC грілка-мат через MOSFET-модуль, ШІМ) ----
+// GPIO39: наступний вільний пін одразу за SOIL_TEMP_ONEWIRE_PIN (38), той
+// самий безпечний діапазон (26-37 зайняті октальною PSRAM/flash-шиною
+// модуля). Керується так само, як grow-світло (LIGHT_PIN) — окремий
+// MOSFET-модуль на зовнішньому 12V/24V живленні, ESP32 лише подає ШІМ-сигнал.
+#define SOIL_HEATER_PIN 39
+constexpr int SOIL_HEATER_PWM_CHANNEL = 5; // канали 0 (камера) і 4 (світло) зайняті
+constexpr int SOIL_HEATER_PWM_FREQ_HZ = 5000;
+constexpr int SOIL_HEATER_PWM_RESOLUTION_BITS = 8; // потужність 0-255
+
+// Захисний ліміт, як у вентилятора (FAN_MAX_RUNTIME_MS): нагрівач — це
+// пожежонебезпечне навантаження без власного термостата, тож таймер
+// оновлюється на КОЖНУ команду "увімкнено" (не лише перехід off->on) і
+// примусово гасить нагрівач, якщо бекенд не підтвердив рішення довше цього
+// часу (наприклад, мережа впала чи процес завис).
+constexpr unsigned long SOIL_HEATER_MAX_RUNTIME_MS = 900000;
+
 // ---- Актуатори ----
 constexpr int PUMP_RELAY_PIN = 47;
 constexpr int FAN_PIN = 21;

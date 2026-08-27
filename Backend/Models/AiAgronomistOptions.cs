@@ -56,4 +56,9 @@ public class AiAgronomistOptions
     // денному вікні норма просто ніколи не набирається.
     public int NightRestStartHour { get; set; } = 23;
     public int NightRestEndHour { get; set; } = 5;
+
+    // Наскільки нижче PlantProfile.SoilTempMinC (у °C) має впасти ґрунт, щоб
+    // локальне правило підігріву вивело нагрівач на повну потужність (255) —
+    // між 0 і цим дефіцитом потужність зростає пропорційно, не різким on/off.
+    public double SoilHeaterFullPowerDeficitC { get; set; } = 5.0;
 }

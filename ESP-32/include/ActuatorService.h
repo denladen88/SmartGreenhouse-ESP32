@@ -17,16 +17,20 @@ public:
   void setPump(bool on);
   void setFan(bool on);
   void setLight(uint8_t brightness); // 0 = вимкнено, 255 = максимальна яскравість
+  void setSoilHeater(uint8_t power);  // 0 = вимкнено, 255 = максимальна потужність
 
   bool isPumpOn() const { return _pumpOn; }
   bool isFanOn() const { return _fanOn; }
   bool isLightOn() const { return _lightBrightness > 0; }
+  bool isSoilHeaterOn() const { return _soilHeaterPower > 0; }
 
 private:
   bool _pumpOn = false;
   bool _fanOn = false;
   uint8_t _lightBrightness = 0;
+  uint8_t _soilHeaterPower = 0;
 
-  unsigned long _pumpStartMs = 0; // millis() моменту останнього вмикання помпи
-  unsigned long _fanStartMs = 0;  // millis() моменту останнього вмикання вентилятора
+  unsigned long _pumpStartMs = 0;       // millis() моменту останнього вмикання помпи
+  unsigned long _fanStartMs = 0;        // millis() моменту останнього вмикання вентилятора
+  unsigned long _soilHeaterStartMs = 0; // millis() моменту останнього підтвердження нагрівача
 };

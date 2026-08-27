@@ -180,12 +180,12 @@ public class AiAgronomistService : BackgroundService
     // від локального контролера чи від будь-чого іншого) — щоб примусове
     // вмикання світла для нічного фото не зачепило pump/fan і щоб потім було
     // куди повертати світло назад.
-    private async Task<(bool PumpOn, bool FanOn, int LightBrightness)> GetLatestActuatorStateAsync(CancellationToken stoppingToken)
+    private async Task<(bool PumpOn, bool FanOn, int LightBrightness, int SoilHeaterPower)> GetLatestActuatorStateAsync(CancellationToken stoppingToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var latest = await db.AiDecisions.OrderByDescending(d => d.Timestamp).FirstOrDefaultAsync(stoppingToken);
-        return latest is null ? (false, false, 0) : (latest.PumpOn, latest.FanOn, latest.LightBrightness);
+        return latest is null ? (false, false, 0, 0) : (latest.PumpOn, latest.FanOn, latest.LightBrightness, latest.SoilHeaterPower);
     }
 
     private async Task RunProfileAnalysisAsync(CancellationToken stoppingToken, string? earlyTriggerReason)
@@ -226,6 +226,7 @@ public class AiAgronomistService : BackgroundService
             SummarizeMetric("Temp", trend, t => t.TemperatureC, "C"),
             SummarizeMetric("Humidity", trend, t => t.HumidityPct, "%"),
             SummarizeMetric("SoilMoisture", trend, t => t.SoilMoisturePct, "%"),
+            SummarizeMetric("SoilTemp", trend, t => t.SoilTempC, "C"),
             SummarizeMetric("Lux", trend, t => t.Lux, ""),
             SummarizeMetric("Pressure", trend, t => t.PressureHpa, "hPa"),
         }.Where(l => l is not null));
@@ -235,6 +236,7 @@ public class AiAgronomistService : BackgroundService
             trend.Select(t =>
                 $"{t.Timestamp:MM-dd HH:mm} Temp={FormatOrNA(t.TemperatureC, "C")} Humidity={FormatOrNA(t.HumidityPct, "%")} " +
                 $"SoilMoisture={FormatOrNA(t.SoilMoisturePct, "%")} (raw diagnostic: {t.SoilRaw:0}) " +
+                $"SoilTemp={FormatOrNA(t.SoilTempC, "C")} " +
                 $"Lux={FormatOrNA(t.Lux)} Pressure={FormatOrNA(t.PressureHpa, "hPa")}"));
 
         var actuatorHistoryText = SummarizeActuatorHistory(recentDecisions);
@@ -268,7 +270,7 @@ public class AiAgronomistService : BackgroundService
 
             _logger.LogInformation("No photo (likely night per ESP32) — forcing grow light on for a proper shot and retrying");
             await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
-                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, 255)));
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, 255, previousDecision.SoilHeaterPower)));
 
             await Task.Delay(TimeSpan.FromSeconds(65), stoppingToken);
 
@@ -283,7 +285,8 @@ public class AiAgronomistService : BackgroundService
             }
 
             await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
-                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.LightBrightness)));
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.LightBrightness,
+                    previousDecision.SoilHeaterPower)));
         }
 
         _logger.LogInformation("Downloaded {ByteCount} bytes from ESP32 camera at {CameraUrl}",
@@ -304,6 +307,7 @@ public class AiAgronomistService : BackgroundService
               $"- Temperature: {profile.TempMinC:0.#}-{profile.TempMaxC:0.#}C\n" +
               $"- Humidity: {profile.HumidityMinPct:0.#}-{profile.HumidityMaxPct:0.#}%\n" +
               $"- SoilMoisture: {profile.SoilMoistureMinPct:0.#}-{profile.SoilMoistureMaxPct:0.#}%\n" +
+              $"- SoilTempMinC: {profile.SoilTempMinC:0.#}C\n" +
               $"- DailyLightHoursTarget: {profile.DailyLightHoursTarget:0.#}h\n" +
               $"- Notes: {profile.Notes}\n\n" +
               "Reassess based on everything below — the trend, and the actuator history (what the automated local rules " +
@@ -336,15 +340,18 @@ public class AiAgronomistService : BackgroundService
             $"{actuatorHistoryText}\n\n" +
             "Set the ideal ranges this plant should be kept within until your next review: temperature, humidity, soil " +
             "moisture (as a calibrated 0-100% reading, 100% = fully wet — this sensor's raw ADC value drifts, judge the " +
-            "range from the trend shape and actuator history above, not just a snapshot), and how many hours of effective " +
-            "light (sun and/or grow light combined) it needs per day. These ranges will be used directly by simple automated " +
-            "rules — not by you — to control the pump, fan, and grow light until your next review: the fan turns on when " +
+            "range from the trend shape and actuator history above, not just a snapshot), the minimum soil temperature " +
+            "(root-zone, not air) it should be kept at, and how many hours of effective light (sun and/or grow light " +
+            "combined) it needs per day. These ranges will be used directly by simple automated rules — not by you — to " +
+            "control the pump, fan, grow light, and a soil heating mat until your next review: the fan turns on when " +
             "temperature is sustained above TempMaxC OR humidity is sustained above HumidityMaxPct (so HumidityMaxPct " +
-            "directly controls ventilation, not just an alert threshold), so make all ranges realistic operating targets, " +
-            "not aspirational extremes. Reply strictly in JSON matching this schema: { \"TempMinC\": " +
-            "number, \"TempMaxC\": number, \"HumidityMinPct\": number, \"HumidityMaxPct\": number, \"SoilMoistureMinPct\": " +
-            "number, \"SoilMoistureMaxPct\": number, \"DailyLightHoursTarget\": number, \"Notes\": \"short rationale, " +
-            "referencing what changed since last time if applicable\" } without markdown code blocks.";
+            "directly controls ventilation, not just an alert threshold), and the soil heater ramps up proportionally " +
+            "whenever soil temperature is below SoilTempMinC (it can only add heat, not cool, so there is no matching max), " +
+            "so make all ranges realistic operating targets, not aspirational extremes. Reply strictly in JSON matching " +
+            "this schema: { \"TempMinC\": number, \"TempMaxC\": number, \"HumidityMinPct\": number, \"HumidityMaxPct\": " +
+            "number, \"SoilMoistureMinPct\": number, \"SoilMoistureMaxPct\": number, \"SoilTempMinC\": number, " +
+            "\"DailyLightHoursTarget\": number, \"Notes\": \"short rationale, referencing what changed since last time if " +
+            "applicable\" } without markdown code blocks.";
 
         var parts = new List<object> { new { text = prompt } };
         if (hasPhoto)
@@ -373,9 +380,10 @@ public class AiAgronomistService : BackgroundService
 
         _logger.LogInformation(
             "AI profile analysis: Temp {TempMin}-{TempMax}C, Humidity {HumMin}-{HumMax}%, SoilMoisture {SoilMin}-{SoilMax}%, " +
-            "DailyLight {Light}h. Notes: {Notes}",
+            "SoilTempMin {SoilTempMin}C, DailyLight {Light}h. Notes: {Notes}",
             analysis.TempMinC, analysis.TempMaxC, analysis.HumidityMinPct, analysis.HumidityMaxPct,
-            analysis.SoilMoistureMinPct, analysis.SoilMoistureMaxPct, analysis.DailyLightHoursTarget, analysis.Notes);
+            analysis.SoilMoistureMinPct, analysis.SoilMoistureMaxPct, analysis.SoilTempMinC,
+            analysis.DailyLightHoursTarget, analysis.Notes);
 
         try
         {
@@ -394,6 +402,7 @@ public class AiAgronomistService : BackgroundService
             tracked.HumidityMaxPct = analysis.HumidityMaxPct;
             tracked.SoilMoistureMinPct = analysis.SoilMoistureMinPct;
             tracked.SoilMoistureMaxPct = analysis.SoilMoistureMaxPct;
+            tracked.SoilTempMinC = analysis.SoilTempMinC;
             tracked.DailyLightHoursTarget = analysis.DailyLightHoursTarget;
             tracked.Notes = analysis.Notes;
             tracked.LastUpdatedUtc = DateTime.UtcNow;
@@ -422,7 +431,7 @@ public class AiAgronomistService : BackgroundService
         {
             var last = segments.Count > 0 ? segments[^1] : null;
             if (last is not null && last.Sample.PumpOn == d.PumpOn && last.Sample.FanOn == d.FanOn &&
-                last.Sample.LightBrightness == d.LightBrightness)
+                last.Sample.LightBrightness == d.LightBrightness && last.Sample.SoilHeaterPower == d.SoilHeaterPower)
             {
                 segments[^1] = last with { End = d.Timestamp, Count = last.Count + 1 };
             }
@@ -434,7 +443,8 @@ public class AiAgronomistService : BackgroundService
 
         return string.Join("\n", segments.TakeLast(_agronomistOptions.DecisionHistoryCount).Select(s =>
             $"{s.Start:MM-dd HH:mm}-{s.End:HH:mm} ({s.Count}x) Pump={(s.Sample.PumpOn ? "On" : "Off")} " +
-            $"Fan={(s.Sample.FanOn ? "On" : "Off")} Light={s.Sample.LightBrightness} — {s.Sample.Reason}"));
+            $"Fan={(s.Sample.FanOn ? "On" : "Off")} Light={s.Sample.LightBrightness} " +
+            $"SoilHeater={s.Sample.SoilHeaterPower} — {s.Sample.Reason}"));
     }
 
     private record ActuatorSegment(DateTime Start, DateTime End, AiDecisionRecord Sample, int Count);
@@ -514,6 +524,12 @@ public class AiAgronomistService : BackgroundService
         var latestLux = await db.Telemetries
             .OrderByDescending(t => t.Timestamp)
             .Select(t => t.Lux)
+            .FirstOrDefaultAsync(stoppingToken);
+
+        var latestSoilTemp = await db.Telemetries
+            .Where(t => t.SoilTempC != null)
+            .OrderByDescending(t => t.Timestamp)
+            .Select(t => t.SoilTempC)
             .FirstOrDefaultAsync(stoppingToken);
 
         // Вентилятор: перегрів АБО стійко висока вологість повітря — усі останні
@@ -602,13 +618,45 @@ public class AiAgronomistService : BackgroundService
                 $"{lightHoursSoFarToday:0.#}h/{profile.DailyLightHoursTarget:0.#}h today -> {lightBrightness}";
         }
 
-        var reason = $"{fanReason}; {pumpReason}; {lightReason}";
+        // Підігрів ґрунту: пропорційний ШІМ, без on/off-стрибків — на відміну від
+        // помпи/вентилятора тут немає ризику "перебору" в інший бік (нагрівач лише
+        // додає тепло), тож просте лінійне наростання від 0 (на SoilTempMinC) до
+        // 255 (дефіцит SoilHeaterFullPowerDeficitC і більше) безпечне й не потребує
+        // ні гістерезису, ні MinSustainedReadings.
+        //
+        // Раніше тут був fallback на вологість (грій, коли волого — щоб сушити й
+        // запобігати гнилі), поки немає DS18B20. Прибрано: на практиці нагрівач сам
+        // впливав на показник вологості (реально сушив ґрунт і/або грів сусідній
+        // резистивний зонд, зсуваючи його опір) швидше, ніж контролер встигав це
+        // відпрацювати — вихідні дані для рішення виявились забрудненими самим
+        // рішенням. Без валідного SoilTempC нагрівач просто вимкнений.
+        int soilHeaterPower;
+        string soilHeaterReason;
+        if (latestSoilTemp is not { } soilTemp)
+        {
+            soilHeaterPower = 0;
+            soilHeaterReason = "No soil temperature sensor connected yet -> Off";
+        }
+        else if (soilTemp >= profile.SoilTempMinC)
+        {
+            soilHeaterPower = 0;
+            soilHeaterReason = $"SoilTemp {soilTemp:0.#}C >= min {profile.SoilTempMinC:0.#}C -> Off";
+        }
+        else
+        {
+            var deficit = profile.SoilTempMinC - soilTemp;
+            soilHeaterPower = (int)Math.Round(Math.Clamp(deficit / _agronomistOptions.SoilHeaterFullPowerDeficitC, 0, 1) * 255);
+            soilHeaterReason = $"SoilTemp {soilTemp:0.#}C < min {profile.SoilTempMinC:0.#}C (deficit {deficit:0.#}C) -> {soilHeaterPower}";
+        }
+
+        var reason = $"{fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}";
 
         db.AiDecisions.Add(new AiDecisionRecord
         {
             PumpOn = pumpOn,
             FanOn = fanOn,
             LightBrightness = lightBrightness,
+            SoilHeaterPower = soilHeaterPower,
             Reason = reason,
             PhotoDescription = string.Empty,
             PhotoFileName = null
@@ -616,13 +664,13 @@ public class AiAgronomistService : BackgroundService
         await db.SaveChangesAsync(stoppingToken);
 
         // Публікуємо щотіку незалежно від того, чи змінилось рішення — саме на
-        // це покладаються FAN_MAX_RUNTIME_MS/помпові failsafe-таймери на ESP32,
-        // які без повторної команди самі гасять актуатор.
-        var commandPayload = JsonSerializer.Serialize(new AiCommand(pumpOn, fanOn, lightBrightness));
+        // це покладаються FAN_MAX_RUNTIME_MS/помпові/нагрівача failsafe-таймери на
+        // ESP32, які без повторної команди самі гасять актуатор.
+        var commandPayload = JsonSerializer.Serialize(new AiCommand(pumpOn, fanOn, lightBrightness, soilHeaterPower));
         await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, commandPayload);
 
-        _logger.LogInformation("Local control decision: Pump={Pump} Fan={Fan} Light={Light} — {Reason}",
-            pumpOn ? "On" : "Off", fanOn ? "On" : "Off", lightBrightness, reason);
+        _logger.LogInformation("Local control decision: Pump={Pump} Fan={Fan} Light={Light} SoilHeater={SoilHeater} — {Reason}",
+            pumpOn ? "On" : "Off", fanOn ? "On" : "Off", lightBrightness, soilHeaterPower, reason);
     }
 
     // ---- Спільне ----
@@ -777,6 +825,7 @@ public class AiAgronomistService : BackgroundService
                 AverageOrNull(bucket.Select(t => t.HumidityPct)),
                 bucket.Average(t => t.SoilRaw),
                 AverageOrNull(bucket.Select(t => t.SoilMoisturePct)),
+                AverageOrNull(bucket.Select(t => t.SoilTempC)),
                 AverageOrNull(bucket.Select(t => t.Lux)),
                 AverageOrNull(bucket.Select(t => t.PressureHpa))))
             .ToList();
@@ -812,6 +861,7 @@ public class AiAgronomistService : BackgroundService
         double? HumidityPct,
         double SoilRaw,
         double? SoilMoisturePct,
+        double? SoilTempC,
         double? Lux,
         double? PressureHpa);
 
@@ -839,6 +889,7 @@ public class AiAgronomistService : BackgroundService
         double HumidityMaxPct,
         double SoilMoistureMinPct,
         double SoilMoistureMaxPct,
+        double SoilTempMinC,
         double DailyLightHoursTarget,
         string Notes);
 

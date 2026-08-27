@@ -90,14 +90,16 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
 
         _logger.LogInformation(
             "Telemetry received: DeviceId={DeviceId} UptimeMs={UptimeMs} Temperature={TemperatureC} " +
-            "Humidity={HumidityPct} Pressure={PressureHpa} Lux={Lux} SoilRaw={SoilRaw} SoilMoisturePct={SoilMoisturePct}",
+            "Humidity={HumidityPct} Pressure={PressureHpa} Lux={Lux} SoilRaw={SoilRaw} SoilMoisturePct={SoilMoisturePct} " +
+            "SoilTempC={SoilTempC}",
             telemetry.DeviceId, telemetry.UptimeMs,
             FormatOrNA(telemetry.TemperatureC, "C"),
             FormatOrNA(telemetry.HumidityPct, "%"),
             FormatOrNA(telemetry.PressureHpa, "hPa"),
             FormatOrNA(telemetry.Lux),
             telemetry.SoilRaw,
-            FormatOrNA(telemetry.SoilMoisturePct, "%"));
+            FormatOrNA(telemetry.SoilMoisturePct, "%"),
+            FormatOrNA(telemetry.SoilTempC, "C"));
 
         try
         {
@@ -113,7 +115,8 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
                 PressureHpa = telemetry.PressureHpa,
                 Lux = telemetry.Lux,
                 SoilRaw = telemetry.SoilRaw,
-                SoilMoisturePct = telemetry.SoilMoisturePct
+                SoilMoisturePct = telemetry.SoilMoisturePct,
+                SoilTempC = telemetry.SoilTempC
             });
 
             await db.SaveChangesAsync();

@@ -36,9 +36,10 @@ void MqttService::handleMessage(char* topic, uint8_t* payload, unsigned int leng
   cmd.pumpOn = doc["pump_on"] | false;
   cmd.fanOn = doc["fan_on"] | false;
   cmd.lightBrightness = doc["light_brightness"] | (uint8_t)0;
+  cmd.soilHeaterPower = doc["soil_heater_power"] | (uint8_t)0;
 
-  Serial.printf("[MQTT] Команда: pump_on=%d, fan_on=%d, light_brightness=%d\n",
-                cmd.pumpOn, cmd.fanOn, cmd.lightBrightness);
+  Serial.printf("[MQTT] Команда: pump_on=%d, fan_on=%d, light_brightness=%d, soil_heater_power=%d\n",
+                cmd.pumpOn, cmd.fanOn, cmd.lightBrightness, cmd.soilHeaterPower);
 
   if (_commandHandler) {
     _commandHandler(cmd);
@@ -97,6 +98,9 @@ void MqttService::publishTelemetry(const SensorData& data) {
   }
   doc["soil_raw"] = data.soilRaw;
   doc["soil_moisture_pct"] = data.soilMoisturePct;
+  if (data.soilTempValid) {
+    doc["soil_temp_c"] = data.soilTempC;
+  }
 
   char payload[256];
   size_t len = serializeJson(doc, payload, sizeof(payload));

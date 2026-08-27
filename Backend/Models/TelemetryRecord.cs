@@ -12,4 +12,5 @@ public class TelemetryRecord
     public double? Lux { get; set; }
     public int SoilRaw { get; set; }
     public double? SoilMoisturePct { get; set; }
+    public double? SoilTempC { get; set; }
 }

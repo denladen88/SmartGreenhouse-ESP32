@@ -13,6 +13,10 @@ void ActuatorService::begin() {
   ledcSetup(LED_PWM_CHANNEL, LED_PWM_FREQ_HZ, LED_PWM_RESOLUTION_BITS);
   ledcAttachPin(LIGHT_PIN, LED_PWM_CHANNEL);
   ledcWrite(LED_PWM_CHANNEL, 0); // одразу гасимо
+
+  ledcSetup(SOIL_HEATER_PWM_CHANNEL, SOIL_HEATER_PWM_FREQ_HZ, SOIL_HEATER_PWM_RESOLUTION_BITS);
+  ledcAttachPin(SOIL_HEATER_PIN, SOIL_HEATER_PWM_CHANNEL);
+  ledcWrite(SOIL_HEATER_PWM_CHANNEL, 0); // одразу гасимо
 }
 
 void ActuatorService::update() {
@@ -29,6 +33,13 @@ void ActuatorService::update() {
     Serial.printf("[ВЕНТИЛЯТОР] УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
                   FAN_MAX_RUNTIME_MS);
     setFan(false);
+  }
+
+  // Той самий захист для ґрунтового нагрівача (SOIL_HEATER_MAX_RUNTIME_MS) — див. Config.h.
+  if (_soilHeaterPower > 0 && (millis() - _soilHeaterStartMs >= SOIL_HEATER_MAX_RUNTIME_MS)) {
+    Serial.printf("[НАГРІВАЧ]  УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
+                  SOIL_HEATER_MAX_RUNTIME_MS);
+    setSoilHeater(0);
   }
 }
 
@@ -64,4 +75,15 @@ void ActuatorService::setFan(bool on) {
 void ActuatorService::setLight(uint8_t brightness) {
   _lightBrightness = brightness;
   ledcWrite(LED_PWM_CHANNEL, brightness);
+}
+
+void ActuatorService::setSoilHeater(uint8_t power) {
+  // Той самий принцип, що й у вентилятора: таймер оновлюється на кожну
+  // команду "увімкнено" (не лише перехід off->on), бо очікується
+  // безперервна робота з періодичним підтвердженням від бекенда.
+  if (power > 0) {
+    _soilHeaterStartMs = millis();
+  }
+  _soilHeaterPower = power;
+  ledcWrite(SOIL_HEATER_PWM_CHANNEL, power);
 }

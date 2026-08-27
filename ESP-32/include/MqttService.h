@@ -8,7 +8,8 @@
 struct CommandData {
   bool pumpOn = false;
   bool fanOn = false;
-  uint8_t lightBrightness = 0; // 0-255, повністю замінює автоматику по BH1750
+  uint8_t lightBrightness = 0;  // 0-255, повністю замінює автоматику по BH1750
+  uint8_t soilHeaterPower = 0;  // 0-255, потужність ШІМ підігріву ґрунту
 };
 
 // Обгортка над PubSubClient: неблокуюче перепідключення, публікація

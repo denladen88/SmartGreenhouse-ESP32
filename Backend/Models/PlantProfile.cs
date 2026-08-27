@@ -25,6 +25,11 @@ public class PlantProfile
     public double SoilMoistureMinPct { get; set; }
     public double SoilMoistureMaxPct { get; set; }
 
+    // Локальне правило підігріву (AiAgronomistService.RunLocalControlAsync) тримає
+    // ґрунт не нижче цього порогу пропорційним ШІМ (немає верхньої межі — нагрівач
+    // лише додає тепло, не охолоджує, тож перегріву від власної роботи не буває).
+    public double SoilTempMinC { get; set; }
+
     public double DailyLightHoursTarget { get; set; }
 
     public string Notes { get; set; } = string.Empty;

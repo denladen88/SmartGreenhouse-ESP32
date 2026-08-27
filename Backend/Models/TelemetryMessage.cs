@@ -10,4 +10,5 @@ public record TelemetryMessage(
     [property: JsonPropertyName("pressure_hpa")] double? PressureHpa,
     [property: JsonPropertyName("lux")] double? Lux,
     [property: JsonPropertyName("soil_raw")] int SoilRaw,
-    [property: JsonPropertyName("soil_moisture_pct")] double? SoilMoisturePct);
+    [property: JsonPropertyName("soil_moisture_pct")] double? SoilMoisturePct,
+    [property: JsonPropertyName("soil_temp_c")] double? SoilTempC);
