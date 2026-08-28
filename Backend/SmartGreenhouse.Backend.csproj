@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Worker">
+<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
@@ -22,5 +22,14 @@
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
     <PackageReference Include="MQTTnet" Version="4.3.7.1207" />
     <PackageReference Include="MQTTnet.Extensions.ManagedClient" Version="4.3.7.1207" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Sdk.Web копіює wwwroot/ лише при dotnet publish (CopyToPublishDirectory) —
+         додатково копіюємо й при dotnet build/run, бо ContentRootPath навмисно
+         зафіксовано на bin/<config>/net8.0 (AppContext.BaseDirectory в
+         Program.cs), а не на корінь проєкту, тож без цього UseStaticFiles()
+         локально під час розробки нічого не знайде. -->
+    <Content Update="wwwroot/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

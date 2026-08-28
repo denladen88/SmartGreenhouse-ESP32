@@ -1,10 +1,12 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Extensions.ManagedClient;
 using SmartGreenhouse.Backend.Data;
+using SmartGreenhouse.Backend.Hubs;
 using SmartGreenhouse.Backend.Models;
 
 namespace SmartGreenhouse.Backend.Services;
@@ -15,15 +17,18 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly MqttOptions _options;
     private readonly IManagedMqttClient _mqttClient;
+    private readonly IHubContext<TelemetryHub> _hub;
 
     public MqttBackgroundService(
         ILogger<MqttBackgroundService> logger,
         IServiceScopeFactory scopeFactory,
-        IOptions<MqttOptions> options)
+        IOptions<MqttOptions> options,
+        IHubContext<TelemetryHub> hub)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
         _options = options.Value;
+        _hub = hub;
 
         var factory = new MqttFactory();
         _mqttClient = factory.CreateManagedMqttClient();
@@ -106,7 +111,7 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            db.Telemetries.Add(new TelemetryRecord
+            var record = new TelemetryRecord
             {
                 DeviceId = telemetry.DeviceId,
                 UptimeMs = telemetry.UptimeMs,
@@ -117,9 +122,11 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
                 SoilRaw = telemetry.SoilRaw,
                 SoilMoisturePct = telemetry.SoilMoisturePct,
                 SoilTempC = telemetry.SoilTempC
-            });
+            };
+            db.Telemetries.Add(record);
 
             await db.SaveChangesAsync();
+            await _hub.Clients.All.SendAsync("TelemetryReceived", record);
         }
         catch (Exception ex)
         {

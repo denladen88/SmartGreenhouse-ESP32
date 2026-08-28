@@ -7,19 +7,35 @@
 		{
 			"name": "Backend",
 			"path": "Backend"
+		},
+		{
+			"name": "MobileApp",
+			"path": "MobileApp"
+		},
+		{
+			"name": "WebApp",
+			"path": "WebApp"
 		}
 	],
 	"settings": {
 		"files.exclude": {
 			"**/.pio": true,
 			"**/bin": true,
-			"**/obj": true
+			"**/obj": true,
+			"**/node_modules": true,
+			"**/.expo": true,
+			"**/dist": true,
+			"Backend/wwwroot": true
 		},
 		"search.exclude": {
 			"**/.pio": true,
 			"**/bin": true,
 			"**/obj": true,
-			"**/greenhouse.db": true
+			"**/greenhouse.db": true,
+			"**/node_modules": true,
+			"**/.expo": true,
+			"**/dist": true,
+			"Backend/wwwroot": true
 		}
 	}
 }

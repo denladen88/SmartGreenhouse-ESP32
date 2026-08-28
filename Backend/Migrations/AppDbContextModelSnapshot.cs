@@ -104,6 +104,35 @@ namespace SmartGreenhouse.Backend.Migrations
                     b.ToTable("PlantProfiles");
                 });
 
+            modelBuilder.Entity("SmartGreenhouse.Backend.Models.Planting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PlantName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PlantedDateUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SoilType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Plantings");
+                });
+
             modelBuilder.Entity("SmartGreenhouse.Backend.Models.TelemetryRecord", b =>
                 {
                     b.Property<Guid>("Id")

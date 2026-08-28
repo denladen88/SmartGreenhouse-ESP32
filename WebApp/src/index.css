@@ -1,0 +1,303 @@
+:root {
+  --text: #333;
+  --text-muted: #666;
+  --bg: #fafafa;
+  --card-bg: #f7f7f7;
+  --border: #e5e4e7;
+  --accent: #3d9be9;
+  --danger: #b3261e;
+
+  font: 16px/1.45 system-ui, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e5e5e5;
+    --text-muted: #999;
+    --bg: #16171d;
+    --card-bg: #1f2028;
+    --border: #2e303a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.brand {
+  font-weight: 600;
+  font-size: 18px;
+}
+
+.topbar nav {
+  display: flex;
+  gap: 16px;
+}
+
+.topbar nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 4px 0;
+  border-bottom: 2px solid transparent;
+}
+
+.topbar nav a.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+main {
+  flex: 1;
+  padding: 20px;
+}
+
+.page {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.page-narrow {
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  background: var(--card-bg);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.card-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.card-value {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 4px 0 8px;
+}
+
+.updated-at {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.profile-box {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--card-bg);
+  border-radius: 12px;
+}
+
+.profile-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.profile-line {
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.profile-notes {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  font-style: italic;
+}
+
+.no-profile {
+  text-align: center;
+  color: var(--text-muted);
+  margin-top: 24px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+input,
+textarea,
+button {
+  font: inherit;
+}
+
+input[type='text'],
+input[type='url'],
+input[type='password'],
+input[type='date'],
+input[type='number'],
+textarea {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  margin-top: 16px;
+}
+
+.hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 12px;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.control-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  font-size: 16px;
+}
+
+.control-row input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+}
+
+.slider-block {
+  margin-bottom: 20px;
+}
+
+.slider-block label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.slider-block input[type='range'] {
+  width: 100%;
+}
+
+.history-row {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.timestamp {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.state {
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.reason {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.photo-description {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  font-style: italic;
+}
+
+.live-offline {
+  font-size: 12px;
+  color: #fff;
+  background: var(--danger);
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+
+.camera-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 12px 0;
+}
+
+.camera-auto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.camera-frame {
+  width: 100%;
+  border-radius: 12px;
+  display: block;
+  background: #000;
+}

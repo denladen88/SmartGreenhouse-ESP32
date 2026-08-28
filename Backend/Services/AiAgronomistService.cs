@@ -1,10 +1,12 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using SmartGreenhouse.Backend.Data;
+using SmartGreenhouse.Backend.Hubs;
 using SmartGreenhouse.Backend.Models;
 
 namespace SmartGreenhouse.Backend.Services;
@@ -33,6 +35,7 @@ public class AiAgronomistService : BackgroundService
     private readonly PlantOptions _plantOptions;
     private readonly IMqttPublisher _mqttPublisher;
     private readonly HttpClient _httpClient;
+    private readonly IHubContext<TelemetryHub> _hub;
 
     // Коли востаннє реально відбувся аналіз профілю (плановий чи позачерговий) —
     // від цього моменту рахуються і ProfileAnalysisIntervalMinutes, і MinMinutesBetweenCycles.
@@ -48,7 +51,8 @@ public class AiAgronomistService : BackgroundService
         IOptions<AiAgronomistOptions> agronomistOptions,
         IOptions<PlantOptions> plantOptions,
         IMqttPublisher mqttPublisher,
-        IHttpClientFactory httpClientFactory)
+        IHttpClientFactory httpClientFactory,
+        IHubContext<TelemetryHub> hub)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
@@ -59,12 +63,27 @@ public class AiAgronomistService : BackgroundService
         _plantOptions = plantOptions.Value;
         _mqttPublisher = mqttPublisher;
         _httpClient = httpClientFactory.CreateClient(nameof(AiAgronomistService));
+        _hub = hub;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken) =>
         await Task.WhenAll(
             RunProfileSupervisionLoopAsync(stoppingToken),
             RunLocalControlLoopAsync(stoppingToken));
+
+    // Дозволяє зовнішньому виклику (PlantingController, коли завели нову
+    // посадку через застосунок) попросити позачерговий аналіз профілю, не
+    // чекаючи до ProfileAnalysisIntervalMinutes (типово 24г) — інакше актуатори
+    // лишались би бездіяльними, поки для нової рослини ще немає PlantProfile
+    // (RunLocalControlAsync просто виходить, якщо профілю немає). Оновлює
+    // _lastProfileAnalysisUtc так само, як плановий тік у
+    // RunProfileSupervisionLoopAsync — щоб той не задублював виклик одразу
+    // після цього на своєму наступному тіку.
+    public async Task TriggerImmediateProfileAnalysisAsync(string reason, CancellationToken ct = default)
+    {
+        await RunProfileAnalysisSafeAsync(ct, reason);
+        _lastProfileAnalysisUtc = DateTime.UtcNow;
+    }
 
     // ---- Профіль: раз на добу (або раніше, при аномалії) Gemini переглядає все і переписує PlantProfile ----
 
@@ -133,12 +152,23 @@ public class AiAgronomistService : BackgroundService
     // безпековий показник на кшталт перегріву/посухи/вологісного грибка), усі
     // не-null точки якої за вікно лежать поза межами PlantProfile. Це лише
     // сигнал "проаналізувати профіль раніше" — жодних рішень тут не приймається.
+    // Найсвіжіша посадка з мобільного застосунку (PlantingController) визначає
+    // "поточну" рослину; якщо жодної ще не заведено (свіжа БД без онбордингу),
+    // відкочуємось на статичний Plant:Name з appsettings.json — той самий засів,
+    // що був єдиним джерелом до появи Planting.
+    private async Task<Planting?> GetCurrentPlantingAsync(AppDbContext db, CancellationToken ct) =>
+        await db.Plantings.OrderByDescending(p => p.CreatedUtc).FirstOrDefaultAsync(ct);
+
+    private string ResolvePlantName(Planting? planting) =>
+        string.IsNullOrWhiteSpace(planting?.PlantName) ? _plantOptions.Name : planting.PlantName;
+
     private async Task<string?> DetectSustainedAnomalyAsync(CancellationToken stoppingToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var profile = await db.PlantProfiles.FirstOrDefaultAsync(p => p.PlantName == _plantOptions.Name, stoppingToken);
+        var plantName = ResolvePlantName(await GetCurrentPlantingAsync(db, stoppingToken));
+        var profile = await db.PlantProfiles.FirstOrDefaultAsync(p => p.PlantName == plantName, stoppingToken);
         if (profile is null)
         {
             return null;
@@ -197,6 +227,7 @@ public class AiAgronomistService : BackgroundService
         List<TelemetryRecord> recentRecords;
         List<AiDecisionRecord> recentDecisions;
         PlantProfile? profile;
+        Planting? planting;
         using (var scope = _scopeFactory.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -210,7 +241,9 @@ public class AiAgronomistService : BackgroundService
                 .OrderBy(d => d.Timestamp)
                 .ToListAsync(stoppingToken);
 
-            profile = await db.PlantProfiles.FirstOrDefaultAsync(p => p.PlantName == _plantOptions.Name, stoppingToken);
+            planting = await GetCurrentPlantingAsync(db, stoppingToken);
+            var plantName = ResolvePlantName(planting);
+            profile = await db.PlantProfiles.FirstOrDefaultAsync(p => p.PlantName == plantName, stoppingToken);
         }
 
         if (recentRecords.Count == 0)
@@ -316,8 +349,11 @@ public class AiAgronomistService : BackgroundService
               "so if the watering history looks wrong for how the plant actually looks in the photo (watering too often/too " +
               "rarely relative to visible plant health), nudge SoilMoistureMinPct/MaxPct to compensate rather than leaving " +
               "them stale.\n\n"
-            : $"This is the first time a profile is being set for {_plantOptions.Name}. Grower's notes: " +
-              $"{(string.IsNullOrWhiteSpace(_plantOptions.CareNotes) ? "(none provided)" : _plantOptions.CareNotes)}\n\n";
+            : $"This is the first time a profile is being set for {ResolvePlantName(planting)}. " +
+              (planting is not null
+                  ? $"Planted on {planting.PlantedDateUtc:yyyy-MM-dd} in {(string.IsNullOrWhiteSpace(planting.SoilType) ? "unspecified soil" : planting.SoilType)}. " +
+                    $"Grower's notes: {(string.IsNullOrWhiteSpace(planting.Notes) ? "(none provided)" : planting.Notes)}\n\n"
+                  : $"Grower's notes: {(string.IsNullOrWhiteSpace(_plantOptions.CareNotes) ? "(none provided)" : _plantOptions.CareNotes)}\n\n");
 
         var earlyTriggerParagraph = earlyTriggerReason is not null
             ? $"NOTE: this review is running earlier than the normal {_agronomistOptions.ProfileAnalysisIntervalMinutes}-" +
@@ -327,7 +363,7 @@ public class AiAgronomistService : BackgroundService
 
         var prompt =
             $"You are an AI Agronomist responsible for setting the ideal growing parameters for a greenhouse growing " +
-            $"{_plantOptions.Name}. " + photoInstruction +
+            $"{ResolvePlantName(planting)}. " + photoInstruction +
             $"Current local time: {DateTime.Now:yyyy-MM-dd HH:mm} ({DateTime.Now:dddd}).\n\n" +
             earlyTriggerParagraph +
             currentProfileParagraph +
@@ -389,10 +425,11 @@ public class AiAgronomistService : BackgroundService
         {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var tracked = await db.PlantProfiles.FirstOrDefaultAsync(p => p.PlantName == _plantOptions.Name, stoppingToken);
+            var plantName = ResolvePlantName(planting);
+            var tracked = await db.PlantProfiles.FirstOrDefaultAsync(p => p.PlantName == plantName, stoppingToken);
             if (tracked is null)
             {
-                tracked = new PlantProfile { PlantName = _plantOptions.Name };
+                tracked = new PlantProfile { PlantName = plantName };
                 db.PlantProfiles.Add(tracked);
             }
 
@@ -409,6 +446,7 @@ public class AiAgronomistService : BackgroundService
             tracked.LastUpdateReason = earlyTriggerReason is null ? "Scheduled daily review" : $"Early review: {earlyTriggerReason}";
 
             await db.SaveChangesAsync(stoppingToken);
+            await _hub.Clients.All.SendAsync("PlantProfileReceived", tracked, stoppingToken);
         }
         catch (Exception ex)
         {
@@ -479,12 +517,13 @@ public class AiAgronomistService : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var profile = await db.PlantProfiles.FirstOrDefaultAsync(p => p.PlantName == _plantOptions.Name, stoppingToken);
+        var plantName = ResolvePlantName(await GetCurrentPlantingAsync(db, stoppingToken));
+        var profile = await db.PlantProfiles.FirstOrDefaultAsync(p => p.PlantName == plantName, stoppingToken);
         if (profile is null)
         {
             _logger.LogInformation(
                 "No PlantProfile yet for {PlantName} — waiting for the first AI profile analysis before controlling actuators",
-                _plantOptions.Name);
+                plantName);
             return;
         }
 
@@ -651,7 +690,7 @@ public class AiAgronomistService : BackgroundService
 
         var reason = $"{fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}";
 
-        db.AiDecisions.Add(new AiDecisionRecord
+        var decisionRecord = new AiDecisionRecord
         {
             PumpOn = pumpOn,
             FanOn = fanOn,
@@ -660,8 +699,10 @@ public class AiAgronomistService : BackgroundService
             Reason = reason,
             PhotoDescription = string.Empty,
             PhotoFileName = null
-        });
+        };
+        db.AiDecisions.Add(decisionRecord);
         await db.SaveChangesAsync(stoppingToken);
+        await _hub.Clients.All.SendAsync("DecisionReceived", decisionRecord, stoppingToken);
 
         // Публікуємо щотіку незалежно від того, чи змінилось рішення — саме на
         // це покладаються FAN_MAX_RUNTIME_MS/помпові/нагрівача failsafe-таймери на
