@@ -15,6 +15,7 @@ type RangeKey =
   | 'soilMoistureMinPct'
   | 'soilMoistureMaxPct'
   | 'soilTempMinC'
+  | 'soilTempMaxC'
   | 'dailyLightHoursTarget';
 
 const FIELDS: { key: RangeKey; label: string }[] = [
@@ -25,6 +26,7 @@ const FIELDS: { key: RangeKey; label: string }[] = [
   { key: 'soilMoistureMinPct', label: 'Вологість ґрунту, мін (%)' },
   { key: 'soilMoistureMaxPct', label: 'Вологість ґрунту, макс (%)' },
   { key: 'soilTempMinC', label: 'Температура ґрунту, мін (°C)' },
+  { key: 'soilTempMaxC', label: 'Температура ґрунту, макс (°C)' },
   { key: 'dailyLightHoursTarget', label: 'Світло, годин/добу' },
 ];
 
@@ -32,6 +34,7 @@ const PAIRS: [RangeKey, RangeKey][] = [
   ['tempMinC', 'tempMaxC'],
   ['humidityMinPct', 'humidityMaxPct'],
   ['soilMoistureMinPct', 'soilMoistureMaxPct'],
+  ['soilTempMinC', 'soilTempMaxC'],
 ];
 
 const emptyValues = () => Object.fromEntries(FIELDS.map((f) => [f.key, ''])) as Record<RangeKey, string>;

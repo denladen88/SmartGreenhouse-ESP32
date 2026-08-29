@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SmartGreenhouse.Backend.Data;
 
@@ -10,9 +11,11 @@ using SmartGreenhouse.Backend.Data;
 namespace SmartGreenhouse.Backend.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260828170630_AddSoilTempMaxC")]
+    partial class AddSoilTempMaxC
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.10");
@@ -50,8 +53,6 @@ namespace SmartGreenhouse.Backend.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("Timestamp");
 
                     b.ToTable("AiDecisions");
                 });
@@ -176,8 +177,6 @@ namespace SmartGreenhouse.Backend.Migrations
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("Timestamp");
 
                     b.ToTable("Telemetries");
                 });

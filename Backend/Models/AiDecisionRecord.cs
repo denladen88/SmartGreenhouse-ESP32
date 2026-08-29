@@ -1,5 +1,10 @@
+using Microsoft.EntityFrameworkCore;
+
 namespace SmartGreenhouse.Backend.Models;
 
+// Часто читається як OrderByDescending(Timestamp) (останній стан актуаторів,
+// час останнього поливу, історія рішень за вікно) — індексуємо.
+[Index(nameof(Timestamp))]
 public class AiDecisionRecord
 {
     public Guid Id { get; set; } = Guid.NewGuid();

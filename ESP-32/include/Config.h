@@ -118,8 +118,15 @@ constexpr float NIGHT_LUX_THRESHOLD = 5.0f;
 // Читання/лог сенсорів і публікація в MQTT навмисно розведені: читаємо й
 // логуємо часто (для живого спостереження в Serial), а публікуємо в MQTT
 // рідше (щоб не заливати брокер/БД телеметрії зайвими точками).
+//
+// Публікація 3 хв (було 10): бекенд тепер реагує на телеметрію подієво
+// (AiAgronomistService.RunLocalControlSignalLoopAsync), тож частіші дані =
+// швидша реакція актуаторів і статистично надійніші вікна трендів
+// (SoilMoistureTrendWindowMinutes=30 отримує ~10 точок замість ~3). ~480
+// рядків/добу в таблиці телеметрії — денний промпт Gemini не роздувається,
+// DownsampleTrend усе одно групує в 60-хв бакети.
 constexpr unsigned long SENSOR_READ_INTERVAL_MS = 60000;
-constexpr unsigned long MQTT_PUBLISH_INTERVAL_MS = 600000;
+constexpr unsigned long MQTT_PUBLISH_INTERVAL_MS = 180000;
 constexpr unsigned long LIGHT_CHECK_INTERVAL_MS = 1000;
 constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 10000;
 constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;

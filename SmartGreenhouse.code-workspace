@@ -15,6 +15,9 @@
 		{
 			"name": "WebApp",
 			"path": "WebApp"
+		},
+		{
+			"path": "../SmartGreenhouse-Learn"
 		}
 	],
 	"settings": {

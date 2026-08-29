@@ -35,6 +35,20 @@ public class PlantProfileController : ControllerBase
             return NotFound();
         }
 
+        // Локальний контролер довіряє цим межам напряму (наприклад, нагрівач
+        // ґрунту вмикає просушку лише коли SoilTempMaxC > SoilTempMinC). Клієнти
+        // валідують min<max самі, але API теж не має тихо приймати суперечливі
+        // діапазони.
+        var invalidPair = updated.TempMinC > updated.TempMaxC ? "temperature"
+            : updated.HumidityMinPct > updated.HumidityMaxPct ? "humidity"
+            : updated.SoilMoistureMinPct > updated.SoilMoistureMaxPct ? "soil moisture"
+            : updated.SoilTempMinC >= updated.SoilTempMaxC ? "soil temperature"
+            : null;
+        if (invalidPair is not null)
+        {
+            return BadRequest($"Min value must be below max for {invalidPair}.");
+        }
+
         profile.TempMinC = updated.TempMinC;
         profile.TempMaxC = updated.TempMaxC;
         profile.HumidityMinPct = updated.HumidityMinPct;
@@ -42,6 +56,7 @@ public class PlantProfileController : ControllerBase
         profile.SoilMoistureMinPct = updated.SoilMoistureMinPct;
         profile.SoilMoistureMaxPct = updated.SoilMoistureMaxPct;
         profile.SoilTempMinC = updated.SoilTempMinC;
+        profile.SoilTempMaxC = updated.SoilTempMaxC;
         profile.DailyLightHoursTarget = updated.DailyLightHoursTarget;
         profile.Notes = updated.Notes;
         profile.LastUpdatedUtc = DateTime.UtcNow;

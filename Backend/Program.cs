@@ -20,12 +20,23 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     ContentRootPath = AppContext.BaseDirectory
 });
 
+// Залишаємо тільки Console + Debug. За замовчуванням на Windows додається ще
+// EventLog-провайдер, який при зупинці диспоузиться раніше за фонові сервіси —
+// їхня спроба залогувати останню помилку кидає ObjectDisposed
+// ('EventLogInternal'), і цей виняток загортає СПРАВЖНЮ помилку в
+// AggregateException "An error occurred while writing to logger(s)", роблячи
+// причину краху нечитабельною.
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddDebug();
+
 builder.Services.Configure<MqttOptions>(builder.Configuration.GetSection("Mqtt"));
 builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection("Gemini"));
 builder.Services.Configure<Esp32Options>(builder.Configuration.GetSection("Esp32"));
 builder.Services.Configure<AiAgronomistOptions>(builder.Configuration.GetSection("AiAgronomist"));
 builder.Services.Configure<PlantOptions>(builder.Configuration.GetSection("Plant"));
 builder.Services.Configure<ApiOptions>(builder.Configuration.GetSection("Api"));
+builder.Services.Configure<DataRetentionOptions>(builder.Configuration.GetSection("DataRetention"));
 
 builder.Services.AddDbContext<AppDbContext>();
 
@@ -44,6 +55,10 @@ builder.Services.AddHttpClient("Esp32Camera", client =>
     client.Timeout = TimeSpan.FromSeconds(15);
 });
 
+// Сигнал "прийшла нова телеметрія": MqttBackgroundService штовхає, локальний
+// контролер AiAgronomistService прокидається одразу, а не чекає свій таймер.
+builder.Services.AddSingleton<TelemetrySignal>();
+
 builder.Services.AddSingleton<MqttBackgroundService>();
 builder.Services.AddSingleton<IMqttPublisher>(sp => sp.GetRequiredService<MqttBackgroundService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MqttBackgroundService>());
@@ -54,6 +69,8 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<MqttBackgroundServ
 // MqttBackgroundService/IMqttPublisher.
 builder.Services.AddSingleton<AiAgronomistService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AiAgronomistService>());
+
+builder.Services.AddHostedService<DataRetentionService>();
 
 builder.Services.AddControllers();
 builder.Services.AddSignalR();

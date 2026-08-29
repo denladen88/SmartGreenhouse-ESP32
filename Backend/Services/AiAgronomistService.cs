@@ -34,13 +34,22 @@ public class AiAgronomistService : BackgroundService
     private readonly AiAgronomistOptions _agronomistOptions;
     private readonly PlantOptions _plantOptions;
     private readonly IMqttPublisher _mqttPublisher;
-    private readonly HttpClient _httpClient;
+    private readonly HttpClient _httpClient;        // Gemini (45с — фото + prompt)
+    private readonly HttpClient _cameraHttpClient;  // ESP32-CAM (15с — щоб мертва камера не тримала слот 45с)
     private readonly IHubContext<TelemetryHub> _hub;
+    private readonly TelemetrySignal _telemetrySignal;
 
     // Коли востаннє реально відбувся аналіз профілю (плановий чи позачерговий) —
     // від цього моменту рахуються і ProfileAnalysisIntervalMinutes, і MinMinutesBetweenCycles.
     // Належить виключно RunProfileSupervisionLoopAsync — локальний контролер його не чіпає.
     private DateTime? _lastProfileAnalysisUtc;
+
+    // Локальний контролер тепер будиться з двох джерел — fallback-таймера і
+    // сигналу про нову телеметрію. Семафор серіалізує їх (один тік за раз), а
+    // _lastLocalControlUtc гасить здвоєний прогін, коли обидва спрацювали разом
+    // (щоб не писати дубль AiDecisionRecord і не публікувати команду двічі).
+    private readonly SemaphoreSlim _localControlGate = new(1, 1);
+    private DateTime _lastLocalControlUtc = DateTime.MinValue;
 
     public AiAgronomistService(
         ILogger<AiAgronomistService> logger,
@@ -52,7 +61,8 @@ public class AiAgronomistService : BackgroundService
         IOptions<PlantOptions> plantOptions,
         IMqttPublisher mqttPublisher,
         IHttpClientFactory httpClientFactory,
-        IHubContext<TelemetryHub> hub)
+        IHubContext<TelemetryHub> hub,
+        TelemetrySignal telemetrySignal)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
@@ -63,13 +73,16 @@ public class AiAgronomistService : BackgroundService
         _plantOptions = plantOptions.Value;
         _mqttPublisher = mqttPublisher;
         _httpClient = httpClientFactory.CreateClient(nameof(AiAgronomistService));
+        _cameraHttpClient = httpClientFactory.CreateClient("Esp32Camera");
         _hub = hub;
+        _telemetrySignal = telemetrySignal;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken) =>
         await Task.WhenAll(
             RunProfileSupervisionLoopAsync(stoppingToken),
-            RunLocalControlLoopAsync(stoppingToken));
+            RunLocalControlTimerLoopAsync(stoppingToken),
+            RunLocalControlSignalLoopAsync(stoppingToken));
 
     // Дозволяє зовнішньому виклику (PlantingController, коли завели нову
     // посадку через застосунок) попросити позачерговий аналіз профілю, не
@@ -281,7 +294,7 @@ public class AiAgronomistService : BackgroundService
         byte[] imageBytes;
         try
         {
-            imageBytes = await _httpClient.GetByteArrayAsync(_esp32Options.CameraUrl, stoppingToken);
+            imageBytes = await _cameraHttpClient.GetByteArrayAsync(_esp32Options.CameraUrl, stoppingToken);
         }
         catch (Exception ex)
         {
@@ -309,7 +322,7 @@ public class AiAgronomistService : BackgroundService
 
             try
             {
-                imageBytes = await _httpClient.GetByteArrayAsync(_esp32Options.CameraUrl, stoppingToken);
+                imageBytes = await _cameraHttpClient.GetByteArrayAsync(_esp32Options.CameraUrl, stoppingToken);
             }
             catch (Exception ex)
             {
@@ -341,6 +354,7 @@ public class AiAgronomistService : BackgroundService
               $"- Humidity: {profile.HumidityMinPct:0.#}-{profile.HumidityMaxPct:0.#}%\n" +
               $"- SoilMoisture: {profile.SoilMoistureMinPct:0.#}-{profile.SoilMoistureMaxPct:0.#}%\n" +
               $"- SoilTempMinC: {profile.SoilTempMinC:0.#}C\n" +
+              $"- SoilTempMaxC: {profile.SoilTempMaxC:0.#}C\n" +
               $"- DailyLightHoursTarget: {profile.DailyLightHoursTarget:0.#}h\n" +
               $"- Notes: {profile.Notes}\n\n" +
               "Reassess based on everything below — the trend, and the actuator history (what the automated local rules " +
@@ -376,18 +390,22 @@ public class AiAgronomistService : BackgroundService
             $"{actuatorHistoryText}\n\n" +
             "Set the ideal ranges this plant should be kept within until your next review: temperature, humidity, soil " +
             "moisture (as a calibrated 0-100% reading, 100% = fully wet — this sensor's raw ADC value drifts, judge the " +
-            "range from the trend shape and actuator history above, not just a snapshot), the minimum soil temperature " +
-            "(root-zone, not air) it should be kept at, and how many hours of effective light (sun and/or grow light " +
-            "combined) it needs per day. These ranges will be used directly by simple automated rules — not by you — to " +
-            "control the pump, fan, grow light, and a soil heating mat until your next review: the fan turns on when " +
-            "temperature is sustained above TempMaxC OR humidity is sustained above HumidityMaxPct (so HumidityMaxPct " +
-            "directly controls ventilation, not just an alert threshold), and the soil heater ramps up proportionally " +
-            "whenever soil temperature is below SoilTempMinC (it can only add heat, not cool, so there is no matching max), " +
-            "so make all ranges realistic operating targets, not aspirational extremes. Reply strictly in JSON matching " +
-            "this schema: { \"TempMinC\": number, \"TempMaxC\": number, \"HumidityMinPct\": number, \"HumidityMaxPct\": " +
-            "number, \"SoilMoistureMinPct\": number, \"SoilMoistureMaxPct\": number, \"SoilTempMinC\": number, " +
-            "\"DailyLightHoursTarget\": number, \"Notes\": \"short rationale, referencing what changed since last time if " +
-            "applicable\" } without markdown code blocks.";
+            "range from the trend shape and actuator history above, not just a snapshot), the minimum AND maximum soil " +
+            "temperature (root-zone, not air) it should be kept between, and how many hours of effective light (sun and/or " +
+            "grow light combined) it needs per day. These ranges will be used directly by simple automated rules — not by " +
+            "you — to control the pump, fan, grow light, and a soil heating mat until your next review: the fan turns on " +
+            "when air temperature is sustained above TempMaxC OR air humidity is sustained above HumidityMaxPct (so " +
+            "HumidityMaxPct directly controls ventilation, not just an alert threshold); the soil heater runs in two modes " +
+            "— proportional to the deficit whenever soil temperature is below SoilTempMinC, AND (separately) power-modulated " +
+            "whenever soil moisture is sustained above SoilMoistureMaxPct, applying bottom heat to dry an over-wet root " +
+            "zone and stave off root rot, easing off as moisture falls back to SoilMoistureMaxPct and as soil temperature " +
+            "rises toward SoilTempMaxC, with a hard cut at SoilTempMaxC. So SoilTempMaxC is a live control setpoint (keep " +
+            "it a few C above SoilTempMinC with real headroom, never at or below it) and SoilMoistureMaxPct now drives an " +
+            "actuator, not just an alert. Make all ranges realistic operating targets, not aspirational extremes. Reply " +
+            "strictly in JSON matching this schema: { \"TempMinC\": number, \"TempMaxC\": number, \"HumidityMinPct\": " +
+            "number, \"HumidityMaxPct\": number, \"SoilMoistureMinPct\": number, \"SoilMoistureMaxPct\": number, " +
+            "\"SoilTempMinC\": number, \"SoilTempMaxC\": number, \"DailyLightHoursTarget\": number, \"Notes\": \"short " +
+            "rationale, referencing what changed since last time if applicable\" } without markdown code blocks.";
 
         var parts = new List<object> { new { text = prompt } };
         if (hasPhoto)
@@ -414,11 +432,24 @@ public class AiAgronomistService : BackgroundService
             return;
         }
 
+        // Захист від некоректної відповіді: якщо AI повернув SoilTempMaxC <= SoilTempMinC,
+        // це або вимкнуло б добір температури, або зняло стелю просушки — обидва
+        // небезпечні. Підставляємо мінімум + запас на повну потужність і логуємо.
+        var soilTempMaxC = analysis.SoilTempMaxC > analysis.SoilTempMinC
+            ? analysis.SoilTempMaxC
+            : analysis.SoilTempMinC + _agronomistOptions.SoilHeaterFullPowerDeficitC;
+        if (soilTempMaxC != analysis.SoilTempMaxC)
+        {
+            _logger.LogWarning(
+                "AI returned SoilTempMaxC {Returned}C <= SoilTempMinC {Min}C — clamping to {Clamped}C",
+                analysis.SoilTempMaxC, analysis.SoilTempMinC, soilTempMaxC);
+        }
+
         _logger.LogInformation(
             "AI profile analysis: Temp {TempMin}-{TempMax}C, Humidity {HumMin}-{HumMax}%, SoilMoisture {SoilMin}-{SoilMax}%, " +
-            "SoilTempMin {SoilTempMin}C, DailyLight {Light}h. Notes: {Notes}",
+            "SoilTemp {SoilTempMin}-{SoilTempMax}C, DailyLight {Light}h. Notes: {Notes}",
             analysis.TempMinC, analysis.TempMaxC, analysis.HumidityMinPct, analysis.HumidityMaxPct,
-            analysis.SoilMoistureMinPct, analysis.SoilMoistureMaxPct, analysis.SoilTempMinC,
+            analysis.SoilMoistureMinPct, analysis.SoilMoistureMaxPct, analysis.SoilTempMinC, soilTempMaxC,
             analysis.DailyLightHoursTarget, analysis.Notes);
 
         try
@@ -440,6 +471,7 @@ public class AiAgronomistService : BackgroundService
             tracked.SoilMoistureMinPct = analysis.SoilMoistureMinPct;
             tracked.SoilMoistureMaxPct = analysis.SoilMoistureMaxPct;
             tracked.SoilTempMinC = analysis.SoilTempMinC;
+            tracked.SoilTempMaxC = soilTempMaxC;
             tracked.DailyLightHoursTarget = analysis.DailyLightHoursTarget;
             tracked.Notes = analysis.Notes;
             tracked.LastUpdatedUtc = DateTime.UtcNow;
@@ -487,9 +519,17 @@ public class AiAgronomistService : BackgroundService
 
     private record ActuatorSegment(DateTime Start, DateTime End, AiDecisionRecord Sample, int Count);
 
-    // ---- Локальний контролер: щохвилини LocalControlIntervalMinutes вирішує pump/fan/light сам, без AI ----
+    // ---- Локальний контролер: вирішує pump/fan/light/heater сам, без AI ----
+    //
+    // Два джерела пробудження:
+    //   * RunLocalControlSignalLoopAsync — на кожну нову телеметрію (швидкий шлях,
+    //     реакція в ту ж секунду);
+    //   * RunLocalControlTimerLoopAsync — fallback раз на LocalControlIntervalMinutes,
+    //     щоб команда актуаторам підтверджувалась навіть коли телеметрія замовкла
+    //     (на це покладаються FAN/SOIL_HEATER_MAX_RUNTIME_MS-таймери прошивки).
+    // Обидва йдуть через один семафор у RunLocalControlSafeAsync.
 
-    private async Task RunLocalControlLoopAsync(CancellationToken stoppingToken)
+    private async Task RunLocalControlTimerLoopAsync(CancellationToken stoppingToken)
     {
         await RunLocalControlSafeAsync(stoppingToken);
 
@@ -500,15 +540,45 @@ public class AiAgronomistService : BackgroundService
         }
     }
 
-    private async Task RunLocalControlSafeAsync(CancellationToken stoppingToken)
+    private async Task RunLocalControlSignalLoopAsync(CancellationToken stoppingToken)
     {
         try
         {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                await _telemetrySignal.WaitAsync(stoppingToken);
+                await RunLocalControlSafeAsync(stoppingToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on shutdown.
+        }
+    }
+
+    private async Task RunLocalControlSafeAsync(CancellationToken stoppingToken)
+    {
+        await _localControlGate.WaitAsync(stoppingToken);
+        try
+        {
+            // Здвоєне пробудження (таймер + сигнал майже одночасно) — другий прогін
+            // нічого не додасть, лише дубль-запис і дубль-команда. 5с достатньо:
+            // телеметрія приходить не частіше ніж раз на кілька хвилин.
+            if (DateTime.UtcNow - _lastLocalControlUtc < TimeSpan.FromSeconds(5))
+            {
+                return;
+            }
+
             await RunLocalControlAsync(stoppingToken);
+            _lastLocalControlUtc = DateTime.UtcNow;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Local actuator control tick failed");
+        }
+        finally
+        {
+            _localControlGate.Release();
         }
     }
 
@@ -541,13 +611,6 @@ public class AiAgronomistService : BackgroundService
             .Select(t => t.TemperatureC!.Value)
             .ToListAsync(stoppingToken);
 
-        var recentHumidity = await db.Telemetries
-            .Where(t => t.HumidityPct != null)
-            .OrderByDescending(t => t.Timestamp)
-            .Take(MinSustainedReadings)
-            .Select(t => t.HumidityPct!.Value)
-            .ToListAsync(stoppingToken);
-
         var todayStartUtc = DateTime.Now.Date.ToUniversalTime();
         var todayLightRecords = await db.Telemetries
             .Where(t => t.Timestamp >= todayStartUtc)
@@ -571,26 +634,48 @@ public class AiAgronomistService : BackgroundService
             .Select(t => t.SoilTempC)
             .FirstOrDefaultAsync(stoppingToken);
 
-        // Вентилятор: перегрів АБО стійко висока вологість повітря — усі останні
-        // MinSustainedReadings точки вище відповідного максимуму, не одна. Раніше
-        // вентилятор реагував лише на температуру, хоча Gemini в нотатках профілю
-        // явно розраховує на провітрювання й від вологості теж (наприклад, щоб
-        // просушити повітря після поливу чи вночі при конденсації).
-        var tempTooHigh = recentTemps.Count >= MinSustainedReadings && recentTemps.All(t => t > profile.TempMaxC);
-        var humidityTooHigh = recentHumidity.Count >= MinSustainedReadings && recentHumidity.All(h => h > profile.HumidityMaxPct);
-        var fanOn = tempTooHigh || humidityTooHigh;
+        // Вентилятор: ТІЛЬКИ охолодження повітря. Вмикається, коли останні
+        // MinSustainedReadings замірів температури всі вище PlantProfile.TempMaxC
+        // (стійкий перегрів, а не один випадковий стрибок), і працює далі з
+        // гістерезисом — доки повітря не охолоне до (TempMaxC - FanHysteresisC).
+        // Без цього "мертвого діапазону" реле смикало б туди-сюди щоразу, коли
+        // температура тремтить рівно біля стелі.
+        //
+        // Вологість більше НЕ керує вентилятором (прибрано на прохання) — тепер
+        // це суто температурний прилад на охолодження. Підігрів повітря буде
+        // окремим ШІМ-актуатором (як грілка ґрунту), а не цим реле: вентилятор
+        // фізично гріти не може, лише ганяти повітря.
+        var fanWasOn = await db.AiDecisions
+            .OrderByDescending(d => d.Timestamp)
+            .Select(d => (bool?)d.FanOn)
+            .FirstOrDefaultAsync(stoppingToken) ?? false;
 
-        var fanReason = (tempTooHigh, humidityTooHigh) switch
+        var latestTemp = recentTemps.Count > 0 ? (double?)recentTemps[0] : null;
+        var tempSustainedHigh = recentTemps.Count >= MinSustainedReadings &&
+            recentTemps.All(t => t > profile.TempMaxC);
+        var fanReleaseTempC = profile.TempMaxC - _agronomistOptions.FanHysteresisC;
+
+        bool fanOn;
+        string fanReason;
+        if (tempSustainedHigh)
         {
-            (true, true) => $"Temp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C > max " +
-                $"{profile.TempMaxC:0.#}C AND Humidity {string.Join("/", recentHumidity.Select(h => h.ToString("0.#")))}% " +
-                $"> max {profile.HumidityMaxPct:0.#}% -> On",
-            (true, false) => $"Temp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C > max " +
-                $"{profile.TempMaxC:0.#}C ({recentTemps.Count} readings) -> On",
-            (false, true) => $"Humidity {string.Join("/", recentHumidity.Select(h => h.ToString("0.#")))}% > max " +
-                $"{profile.HumidityMaxPct:0.#}% ({recentHumidity.Count} readings) -> On",
-            _ => $"Temp within {profile.TempMaxC:0.#}C max, Humidity within {profile.HumidityMaxPct:0.#}% max -> Off"
-        };
+            fanOn = true;
+            fanReason = $"Temp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C > max " +
+                $"{profile.TempMaxC:0.#}C ({recentTemps.Count} readings) -> On (cooling)";
+        }
+        else if (fanWasOn && latestTemp is { } stillWarm && stillWarm > fanReleaseTempC)
+        {
+            fanOn = true;
+            fanReason = $"Temp {stillWarm:0.#}C still above release {fanReleaseTempC:0.#}C " +
+                $"(max {profile.TempMaxC:0.#}C - hysteresis {_agronomistOptions.FanHysteresisC:0.#}C) -> On (cooling)";
+        }
+        else
+        {
+            fanOn = false;
+            fanReason = latestTemp is { } coolEnough
+                ? $"Temp {coolEnough:0.#}C <= release {fanReleaseTempC:0.#}C (max {profile.TempMaxC:0.#}C) -> Off"
+                : "No air temperature readings -> Off";
+        }
 
         // Помпа: вологість спадає і вже нижче мінімуму, плюс не поливали нещодавно
         // (запобіжник від кореневої гнилі базиліка — див. Plant:CareNotes).
@@ -657,18 +742,32 @@ public class AiAgronomistService : BackgroundService
                 $"{lightHoursSoFarToday:0.#}h/{profile.DailyLightHoursTarget:0.#}h today -> {lightBrightness}";
         }
 
-        // Підігрів ґрунту: пропорційний ШІМ, без on/off-стрибків — на відміну від
-        // помпи/вентилятора тут немає ризику "перебору" в інший бік (нагрівач лише
-        // додає тепло), тож просте лінійне наростання від 0 (на SoilTempMinC) до
-        // 255 (дефіцит SoilHeaterFullPowerDeficitC і більше) безпечне й не потребує
-        // ні гістерезису, ні MinSustainedReadings.
+        // Підігрів ґрунту працює у ДВОХ режимах, обидва пропорційним ШІМ (без
+        // on/off-стрибків):
+        //   1) добір температури — лінійне наростання від 0 (на SoilTempMinC) до
+        //      255 (дефіцит SoilHeaterFullPowerDeficitC і більше);
+        //   2) просушка перезволоженого ґрунту — коли SoilMoisturePct стійко вище
+        //      SoilMoistureMaxPct, підігрів прискорює випаровування з кореневої
+        //      зони (базилік гине насамперед від гнилі при мокрому ґрунті — див.
+        //      Plant:CareNotes). Потужність = мінімум двох лінійних факторів:
+        //      наскільки волого над ціллю (moistureFactor) і скільки лишилось
+        //      "запасу" під стелею SoilTempMaxC (tempFactor). Тож підігрів сам
+        //      стихає і коли ґрунт підсох до цілі, і коли температура підійшла до
+        //      стелі — на самій SoilTempMaxC жорсткий обрив.
         //
-        // Раніше тут був fallback на вологість (грій, коли волого — щоб сушити й
-        // запобігати гнилі), поки немає DS18B20. Прибрано: на практиці нагрівач сам
-        // впливав на показник вологості (реально сушив ґрунт і/або грів сусідній
-        // резистивний зонд, зсуваючи його опір) швидше, ніж контролер встигав це
-        // відпрацювати — вихідні дані для рішення виявились забрудненими самим
-        // рішенням. Без валідного SoilTempC нагрівач просто вимкнений.
+        // Раніше режим просушки вже пробували (тоді фіксованою потужністю, поки не
+        // було DS18B20) і прибрали: нагрівач сам зсував показник вологості (сушив
+        // ґрунт / грів резистивний зонд) швидше, ніж 10-хв цикл встигав відпрацювати
+        // — рішення забруднювало власні вхідні дані. Цей ефект нікуди не подівся,
+        // але пропорційне згасання (замість різкого on/off) не дає контуру
+        // "розгойдатись", а стеля SoilTempMaxC обмежує найгірший випадок.
+        //
+        // hasCeiling: якщо профіль ще не задав SoilTempMaxC (0 чи <= SoilTempMinC),
+        // поводимось як раніше — тільки добір температури, просушка вимкнена.
+        var soilWet = soilPoints.Count >= MinSustainedReadings &&
+            soilPoints.All(p => p > profile.SoilMoistureMaxPct);
+        var hasCeiling = profile.SoilTempMaxC > profile.SoilTempMinC;
+
         int soilHeaterPower;
         string soilHeaterReason;
         if (latestSoilTemp is not { } soilTemp)
@@ -676,16 +775,37 @@ public class AiAgronomistService : BackgroundService
             soilHeaterPower = 0;
             soilHeaterReason = "No soil temperature sensor connected yet -> Off";
         }
-        else if (soilTemp >= profile.SoilTempMinC)
+        else if (hasCeiling && soilTemp >= profile.SoilTempMaxC)
         {
+            // Стеля завжди виграє — байдуже, гріли б ми для добору чи для просушки.
             soilHeaterPower = 0;
-            soilHeaterReason = $"SoilTemp {soilTemp:0.#}C >= min {profile.SoilTempMinC:0.#}C -> Off";
+            soilHeaterReason = $"SoilTemp {soilTemp:0.#}C >= max {profile.SoilTempMaxC:0.#}C -> Off (ceiling)";
         }
-        else
+        else if (soilTemp < profile.SoilTempMinC)
         {
             var deficit = profile.SoilTempMinC - soilTemp;
             soilHeaterPower = (int)Math.Round(Math.Clamp(deficit / _agronomistOptions.SoilHeaterFullPowerDeficitC, 0, 1) * 255);
             soilHeaterReason = $"SoilTemp {soilTemp:0.#}C < min {profile.SoilTempMinC:0.#}C (deficit {deficit:0.#}C) -> {soilHeaterPower}";
+        }
+        else if (soilWet && hasCeiling)
+        {
+            var latestSoil = soilPoints[^1];
+            var moistureFactor = Math.Clamp(
+                (latestSoil - profile.SoilMoistureMaxPct) / _agronomistOptions.SoilDryingFullPowerExcessPct, 0, 1);
+            var tempFactor = Math.Clamp(
+                (profile.SoilTempMaxC - soilTemp) / _agronomistOptions.SoilDryingCeilingTaperC, 0, 1);
+            soilHeaterPower = (int)Math.Round(Math.Min(moistureFactor, tempFactor) * 255);
+            soilHeaterReason = soilHeaterPower > 0
+                ? $"SoilMoisture {latestSoil:0.#}% > max {profile.SoilMoistureMaxPct:0.#}% " +
+                  $"(excess {latestSoil - profile.SoilMoistureMaxPct:0.#}%), SoilTemp {soilTemp:0.#}/{profile.SoilTempMaxC:0.#}C " +
+                  $"-> drying at {soilHeaterPower}"
+                : $"SoilMoisture {latestSoil:0.#}% > max {profile.SoilMoistureMaxPct:0.#}% but SoilTemp {soilTemp:0.#}C " +
+                  $"near max {profile.SoilTempMaxC:0.#}C, easing off -> Off";
+        }
+        else
+        {
+            soilHeaterPower = 0;
+            soilHeaterReason = $"SoilTemp {soilTemp:0.#}C in range, SoilMoisture within {profile.SoilMoistureMaxPct:0.#}% max -> Off";
         }
 
         var reason = $"{fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}";
@@ -931,6 +1051,7 @@ public class AiAgronomistService : BackgroundService
         double SoilMoistureMinPct,
         double SoilMoistureMaxPct,
         double SoilTempMinC,
+        double SoilTempMaxC,
         double DailyLightHoursTarget,
         string Notes);
 
