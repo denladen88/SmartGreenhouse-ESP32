@@ -46,6 +46,7 @@ export interface PlantProfile {
   soilTempMinC: number;
   soilTempMaxC: number;
   dailyLightHoursTarget: number;
+  growthStage: string;
   notes: string;
   lastUpdatedUtc: string;
   lastUpdateReason: string;

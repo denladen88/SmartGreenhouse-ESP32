@@ -138,6 +138,7 @@ export function DashboardPage() {
       {profile && (
         <div className="profile-box">
           <div className="profile-title">{profile.plantName}</div>
+          {profile.growthStage && <div className="profile-line">Етап розвитку: {profile.growthStage}</div>}
           <div className="profile-line">
             Темп: {profile.tempMinC.toFixed(0)}–{profile.tempMaxC.toFixed(0)}°C · Вологість:{' '}
             {profile.humidityMinPct.toFixed(0)}–{profile.humidityMaxPct.toFixed(0)}%

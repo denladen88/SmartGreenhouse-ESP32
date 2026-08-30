@@ -12,6 +12,9 @@ export function ControlsPage() {
   const latestDecisionQuery = useQuery({
     queryKey: ['decisions', 'latest'],
     queryFn: () => api.get<AiDecisionRecord[]>('/api/decisions/history?count=1').then((r) => r?.[0] ?? null),
+    // Фолбек, коли SignalR-хаб офлайн — інакше показаний тут "поточний стан"
+    // застигає на останньому, що встиг долетіти живою подією DecisionReceived.
+    refetchInterval: 60 * 1000,
   });
   const latest = latestDecisionQuery.data;
 

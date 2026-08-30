@@ -148,6 +148,9 @@ export function DashboardScreen() {
       {profile && (
         <View style={styles.profileBox}>
           <Text style={styles.profileTitle}>{profile.plantName}</Text>
+          {profile.growthStage ? (
+            <Text style={styles.profileLine}>Етап розвитку: {profile.growthStage}</Text>
+          ) : null}
           <Text style={styles.profileLine}>
             Темп: {profile.tempMinC.toFixed(0)}–{profile.tempMaxC.toFixed(0)}°C · Вологість:{' '}
             {profile.humidityMinPct.toFixed(0)}–{profile.humidityMaxPct.toFixed(0)}%

@@ -24,13 +24,23 @@ export function HistoryPage() {
   const query = useQuery({
     queryKey: ['decisions', 'history'],
     queryFn: () => api.get<AiDecisionRecord[]>(`/api/decisions/history?count=${DECISION_HISTORY_COUNT}`),
+    // Live-пуш DecisionReceived (api/signalr.ts) дописує нові рішення в цей
+    // самий кеш одразу. Але коли хаб офлайн, без цього фолбеку команди
+    // локального контролера (кожні ~10 хв) і ручні override не з'являлись би
+    // до перезавантаження сторінки — той самий підхід, що й на Dashboard.
+    refetchInterval: 60 * 1000,
   });
 
   const decisions = query.data ?? [];
 
   return (
     <div className="page page-narrow">
-      <h1>Історія</h1>
+      <div className="page-header">
+        <h1>Історія</h1>
+        <button className="secondary" onClick={() => query.refetch()} disabled={query.isFetching}>
+          {query.isFetching ? 'Оновлення…' : 'Оновити'}
+        </button>
+      </div>
       {query.isError && (
         <>
           <p className="error">Не вдалось завантажити історію: {(query.error as Error).message}</p>

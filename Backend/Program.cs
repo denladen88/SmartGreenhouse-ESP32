@@ -4,6 +4,7 @@ using SmartGreenhouse.Backend.Data;
 using SmartGreenhouse.Backend.Hubs;
 using SmartGreenhouse.Backend.Middleware;
 using SmartGreenhouse.Backend.Models;
+using SmartGreenhouse.Backend.Serialization;
 using SmartGreenhouse.Backend.Services;
 
 if (File.Exists(".env"))
@@ -72,8 +73,15 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<AiAgronomistServic
 
 builder.Services.AddHostedService<DataRetentionService>();
 
-builder.Services.AddControllers();
-builder.Services.AddSignalR();
+// Той самий UTC-конвертер і для REST-відповідей, і для SignalR-пушів —
+// інакше час у живих оновленнях (DecisionReceived/TelemetryReceived) і в
+// підвантаженій історії розходився б.
+builder.Services
+    .AddControllers()
+    .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(new UtcDateTimeConverter()));
+builder.Services
+    .AddSignalR()
+    .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new UtcDateTimeConverter()));
 
 // AllowAnyOrigin є прийнятним тут: авторизація йде через заголовок
 // X-Api-Key (і ?access_token= для SignalR), а не cookie, тож

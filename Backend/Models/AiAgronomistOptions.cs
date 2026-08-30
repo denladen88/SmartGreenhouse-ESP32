@@ -2,10 +2,19 @@ namespace SmartGreenhouse.Backend.Models;
 
 public class AiAgronomistOptions
 {
-    // Як часто Gemini "по плану" переглядає фото+тренд і переписує ідеальний
-    // профіль рослини (PlantProfile) — не рішення актуаторів, ними керує
-    // локальний контролер (AiAgronomistService.RunLocalControlAsync).
-    public int ProfileAnalysisIntervalMinutes { get; set; } = 1440;
+    // Локальна година доби (0-23), о якій Gemini "по плану" переглядає фото+тренд
+    // і переписує ідеальний профіль рослини (PlantProfile) — рівно один раз на
+    // добу. Рішеннями актуаторів між цими оглядами керує локальний контролер
+    // (AiAgronomistService.RunLocalControlAsync), не AI.
+    public int DailyAnalysisHour { get; set; } = 12;
+
+    // Плановий огляд НЕ виконується без свіжого фото. Якщо о DailyAnalysisHour
+    // камера не віддала кадр (офлайн / затемно), пробуємо ще раз кожні
+    // PhotoRetryIntervalMinutes, поки від старту огляду не мине
+    // PhotoRetryWindowMinutes — після чого цей день пропускається (профіль
+    // лишається без змін). Для запуску о 12:00 вікно 120 хв = "до 14:00".
+    public int PhotoRetryIntervalMinutes { get; set; } = 15;
+    public int PhotoRetryWindowMinutes { get; set; } = 120;
 
     public int TrendWindowMinutes { get; set; } = 1440;
     public int TrendBucketMinutes { get; set; } = 60;
@@ -21,24 +30,12 @@ public class AiAgronomistOptions
     // BH1750 у вашій теплиці.
     public double GrowthLuxThreshold { get; set; } = 1000.0;
 
-    // Мінімальний проміжок між будь-якими двома аналізами профілю (плановим чи
-    // позачерговим) — запобіжник, щоб DetectSustainedAnomalyAsync не закидав
-    // Gemini запитами, поки аномалія триває годинами.
-    public int MinMinutesBetweenCycles { get; set; } = 30;
-
-    // Тік перевірки "чи не пора проаналізувати профіль" (плановий/позачерговий) —
-    // і водночас FALLBACK-таймер локального контролера актуаторів. Основний шлях
-    // тепер подієвий: RunLocalControlSignalLoopAsync реагує на кожну нову
-    // телеметрію одразу. Цей таймер лишається як підстрахування — щоб команда
-    // актуаторам підтверджувалась навіть коли телеметрія замовкла (на це
-    // покладаються FAN/SOIL_HEATER_MAX_RUNTIME_MS=15 хв у прошивці; 10 хв дає
-    // запас поверх них).
+    // FALLBACK-таймер локального контролера актуаторів. Основний шлях подієвий:
+    // RunLocalControlSignalLoopAsync реагує на кожну нову телеметрію одразу. Цей
+    // таймер лишається як підстрахування — щоб команда актуаторам
+    // підтверджувалась навіть коли телеметрія замовкла (на це покладаються
+    // FAN/SOIL_HEATER_MAX_RUNTIME_MS=15 хв у прошивці; 10 хв дає запас поверх них).
     public int LocalControlIntervalMinutes { get; set; } = 10;
-
-    // Вікно, за яке дивимось на телеметрію, шукаючи стійке (не одноразове)
-    // відхилення Temp/Humidity/SoilMoisture за межі PlantProfile — тригер для
-    // позачергового аналізу профілю.
-    public int SustainedExcursionMinutes { get; set; } = 30;
 
     // Вікно для локального правила помпи: шукаємо спадний тренд вологості
     // ґрунту саме в цих межах.

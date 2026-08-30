@@ -41,6 +41,13 @@ public class PlantProfile
 
     public double DailyLightHoursTarget { get; set; }
 
+    // Фенологічна стадія рослини на момент останнього огляду (seedling /
+    // vegetative / flowering / fruiting / senescing тощо) — Gemini оцінює її з
+    // фото + днів від посадки + тренду і повертає окремим полем. Локальний
+    // контролер її не читає; це контекст для наступного огляду і для показу в
+    // застосунках.
+    public string GrowthStage { get; set; } = string.Empty;
+
     public string Notes { get; set; } = string.Empty;
     public DateTime LastUpdatedUtc { get; set; } = DateTime.UtcNow;
     public string LastUpdateReason { get; set; } = string.Empty;

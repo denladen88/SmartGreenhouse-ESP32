@@ -88,6 +88,18 @@ main {
   margin: 0 auto;
 }
 
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.page-header button.secondary {
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

@@ -11,19 +11,24 @@ using SmartGreenhouse.Backend.Models;
 
 namespace SmartGreenhouse.Backend.Services;
 
-// Два незалежні цикли: RunProfileSupervisionLoopAsync раз на добу (або
-// позачергово, при стійкій аномалії) питає Gemini і повністю переписує
-// PlantProfile; RunLocalControlLoopAsync щохвилини LocalControlIntervalMinutes
-// сам вирішує pump/fan/light простими правилами, спираючись на цей профіль —
-// жодного звернення до AI на кожен тік актуаторів.
+// Два незалежні цикли: RunProfileSupervisionLoopAsync рівно раз на добу о
+// AiAgronomistOptions.DailyAnalysisHour (плюс одноразовий bootstrap, якщо для
+// поточної рослини профілю ще нема) питає Gemini і повністю переписує
+// PlantProfile; RunLocalControl* сам вирішує pump/fan/light/heater простими
+// правилами, спираючись на цей профіль — жодного звернення до AI на кожен тік
+// актуаторів.
 public class AiAgronomistService : BackgroundService
 {
     private static readonly JsonSerializerOptions DecisionJsonOptions = new() { PropertyNameCaseInsensitive = true };
     public const string PhotosDirectory = "Photos";
 
-    // Скільки послідовних не-null точок треба, щоб довіряти "стійкому" тренду
-    // (і в DetectSustainedAnomalyAsync, і в локальному правилі вентилятора) —
-    // одна точка може бути шумом, кілька поспіль — уже сигнал.
+    // Плановий (щоденний) огляд вимагає свіжого фото; bootstrap для нової рослини
+    // — ні (краще профіль на самих сенсорах, ніж бездіяльні актуатори до полудня).
+    private enum ProfileReviewKind { ScheduledDaily, Bootstrap }
+
+    // Скільки послідовних не-null точок треба, щоб довіряти "стійкому" тренду в
+    // локальних правилах (вентилятор, помпа, просушка ґрунту) — одна точка може
+    // бути шумом, кілька поспіль — уже сигнал.
     private const int MinSustainedReadings = 2;
 
     private readonly ILogger<AiAgronomistService> _logger;
@@ -39,10 +44,12 @@ public class AiAgronomistService : BackgroundService
     private readonly IHubContext<TelemetryHub> _hub;
     private readonly TelemetrySignal _telemetrySignal;
 
-    // Коли востаннє реально відбувся аналіз профілю (плановий чи позачерговий) —
-    // від цього моменту рахуються і ProfileAnalysisIntervalMinutes, і MinMinutesBetweenCycles.
-    // Належить виключно RunProfileSupervisionLoopAsync — локальний контролер його не чіпає.
-    private DateTime? _lastProfileAnalysisUtc;
+    // Локальна дата, коли востаннє СТАРТУВАВ плановий (ScheduledDaily) огляд —
+    // байдуже, чи він дописав профіль. Гасить тісний повторний прогін, коли
+    // плановий огляд завершився без фото і нічого не записав (інакше цикл одразу
+    // побачив би "після полудня, сьогодні ще не було" і запустився знову).
+    // Належить виключно RunProfileSupervisionLoopAsync.
+    private DateOnly? _lastScheduledAttemptLocalDate;
 
     // Локальний контролер тепер будиться з двох джерел — fallback-таймера і
     // сигналу про нову телеметрію. Семафор серіалізує їх (один тік за раз), а
@@ -84,75 +91,115 @@ public class AiAgronomistService : BackgroundService
             RunLocalControlTimerLoopAsync(stoppingToken),
             RunLocalControlSignalLoopAsync(stoppingToken));
 
-    // Дозволяє зовнішньому виклику (PlantingController, коли завели нову
-    // посадку через застосунок) попросити позачерговий аналіз профілю, не
-    // чекаючи до ProfileAnalysisIntervalMinutes (типово 24г) — інакше актуатори
-    // лишались би бездіяльними, поки для нової рослини ще немає PlantProfile
-    // (RunLocalControlAsync просто виходить, якщо профілю немає). Оновлює
-    // _lastProfileAnalysisUtc так само, як плановий тік у
-    // RunProfileSupervisionLoopAsync — щоб той не задублював виклик одразу
-    // після цього на своєму наступному тіку.
+    // Дозволяє зовнішньому виклику (PlantingController, коли завели нову посадку
+    // через застосунок) попросити НЕГАЙНИЙ bootstrap-аналіз профілю, не чекаючи
+    // до наступного DailyAnalysisHour — інакше актуатори лишались би
+    // бездіяльними, поки для нової рослини ще немає PlantProfile
+    // (RunLocalControlAsync просто виходить, якщо профілю немає). No-op, якщо
+    // профіль для поточної рослини вже є: щоденний огляд його й так перегляне.
     public async Task TriggerImmediateProfileAnalysisAsync(string reason, CancellationToken ct = default)
     {
-        await RunProfileAnalysisSafeAsync(ct, reason);
-        _lastProfileAnalysisUtc = DateTime.UtcNow;
+        if (await HasProfileForCurrentPlantAsync(ct))
+        {
+            _logger.LogInformation(
+                "Profile already exists for the current plant — skipping bootstrap analysis ({Reason})", reason);
+            return;
+        }
+
+        await RunProfileAnalysisSafeAsync(ct, ProfileReviewKind.Bootstrap, $"Initial profile: {reason}");
     }
 
-    // ---- Профіль: раз на добу (або раніше, при аномалії) Gemini переглядає все і переписує PlantProfile ----
+    // ---- Профіль: рівно раз на добу о DailyAnalysisHour Gemini переглядає все і переписує PlantProfile ----
 
     private async Task RunProfileSupervisionLoopAsync(CancellationToken stoppingToken)
     {
-        // Перший аналіз одразу при старті — він же й бутстрап, якщо профілю для
-        // цієї рослини в базі ще немає.
-        await RunProfileAnalysisSafeAsync(stoppingToken, earlyTriggerReason: null);
-        _lastProfileAnalysisUtc = DateTime.UtcNow;
-
-        // Тік коротший за ProfileAnalysisIntervalMinutes: на кожному перевіряємо,
-        // чи не пора або плановий перегляд (минув ProfileAnalysisIntervalMinutes),
-        // або позачерговий через стійку аномалію (минуло хоча б MinMinutesBetweenCycles
-        // і DetectSustainedAnomalyAsync каже, що щось стійко вийшло за межі профілю).
-        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(_agronomistOptions.LocalControlIntervalMinutes));
-
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+        try
         {
-            var elapsed = DateTime.UtcNow - (_lastProfileAnalysisUtc ?? DateTime.MinValue);
-            if (elapsed >= TimeSpan.FromMinutes(_agronomistOptions.ProfileAnalysisIntervalMinutes))
+            // Одноразовий bootstrap: якщо для поточної рослини профілю ще немає
+            // (свіжа БД або нова посадка зі зміненою назвою), не змушуємо
+            // актуатори чекати до полудня — робимо аналіз одразу, фото не
+            // вимагаємо.
+            if (!await HasProfileForCurrentPlantAsync(stoppingToken))
             {
-                await RunProfileAnalysisSafeAsync(stoppingToken, earlyTriggerReason: null);
-                _lastProfileAnalysisUtc = DateTime.UtcNow;
-                continue;
+                await RunProfileAnalysisSafeAsync(stoppingToken, ProfileReviewKind.Bootstrap,
+                    "Initial profile (no profile on startup)");
             }
 
-            if (elapsed < TimeSpan.FromMinutes(_agronomistOptions.MinMinutesBetweenCycles))
+            while (!stoppingToken.IsCancellationRequested)
             {
-                continue;
-            }
+                // "Навздогін": бекенд підняли вже після DailyAnalysisHour, а
+                // сьогоднішній плановий огляд ще не стартував у цьому процесі
+                // (_lastScheduledAttemptLocalDate) і профіль сьогодні після
+                // полудня не оновлювався (перевірка в БД — переживає рестарт).
+                // Тоді не чекаємо повну добу до наступного полудня.
+                var today = DateOnly.FromDateTime(DateTime.Now);
+                var noonPassed = DateTime.Now.Hour >= _agronomistOptions.DailyAnalysisHour;
+                var catchUp = noonPassed
+                    && _lastScheduledAttemptLocalDate != today
+                    && !await AlreadyReviewedSinceTodayNoonAsync(stoppingToken);
 
-            string? anomalyReason;
-            try
-            {
-                anomalyReason = await DetectSustainedAnomalyAsync(stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Anomaly detection failed");
-                anomalyReason = null;
-            }
+                if (!catchUp)
+                {
+                    await Task.Delay(TimeUntilNextNoon(), stoppingToken);
+                }
 
-            if (anomalyReason is not null)
-            {
-                _logger.LogWarning("Sustained anomaly detected, running an early profile analysis: {Reason}", anomalyReason);
-                await RunProfileAnalysisSafeAsync(stoppingToken, anomalyReason);
-                _lastProfileAnalysisUtc = DateTime.UtcNow;
+                if (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                _lastScheduledAttemptLocalDate = DateOnly.FromDateTime(DateTime.Now);
+                await RunProfileAnalysisSafeAsync(stoppingToken, ProfileReviewKind.ScheduledDaily, "Scheduled daily review");
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on shutdown.
         }
     }
 
-    private async Task RunProfileAnalysisSafeAsync(CancellationToken stoppingToken, string? earlyTriggerReason)
+    // Час до найближчого настання DailyAnalysisHour за локальним годинником. У
+    // день переходу на літній/зимовий час похибка ≤ 1 год і самокоригується на
+    // наступній ітерації.
+    private TimeSpan TimeUntilNextNoon()
+    {
+        var now = DateTime.Now;
+        var todayNoon = now.Date.AddHours(_agronomistOptions.DailyAnalysisHour);
+        var nextNoon = now < todayNoon ? todayNoon : todayNoon.AddDays(1);
+        return nextNoon - now;
+    }
+
+    private async Task<bool> HasProfileForCurrentPlantAsync(CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var plantName = ResolvePlantName(await GetCurrentPlantingAsync(db, ct));
+        return await db.PlantProfiles.AnyAsync(p => p.PlantName == plantName, ct);
+    }
+
+    // Чи профіль поточної рослини вже оновлювався сьогодні після DailyAnalysisHour
+    // — тобто плановий огляд (або ручна правка через застосунок) цього дня вже
+    // стався. Переживає рестарт бекенду, на відміну від
+    // _lastScheduledAttemptLocalDate.
+    private async Task<bool> AlreadyReviewedSinceTodayNoonAsync(CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var plantName = ResolvePlantName(await GetCurrentPlantingAsync(db, ct));
+        var todayNoonUtc = DateTime.Now.Date.AddHours(_agronomistOptions.DailyAnalysisHour).ToUniversalTime();
+        var lastUpdatedUtc = await db.PlantProfiles
+            .Where(p => p.PlantName == plantName)
+            .Select(p => (DateTime?)p.LastUpdatedUtc)
+            .FirstOrDefaultAsync(ct);
+        return lastUpdatedUtc is { } u && u >= todayNoonUtc;
+    }
+
+    private async Task RunProfileAnalysisSafeAsync(
+        CancellationToken stoppingToken, ProfileReviewKind kind, string lastUpdateReason)
     {
         try
         {
-            await RunProfileAnalysisAsync(stoppingToken, earlyTriggerReason);
+            await RunProfileAnalysisAsync(stoppingToken, kind, lastUpdateReason);
         }
         catch (Exception ex)
         {
@@ -160,11 +207,6 @@ public class AiAgronomistService : BackgroundService
         }
     }
 
-    // Дивиться на телеметрію за останні SustainedExcursionMinutes і шукає метрику
-    // (Temp/Humidity/SoilMoisture — Lux свідомо не перевіряємо тут, він не
-    // безпековий показник на кшталт перегріву/посухи/вологісного грибка), усі
-    // не-null точки якої за вікно лежать поза межами PlantProfile. Це лише
-    // сигнал "проаналізувати профіль раніше" — жодних рішень тут не приймається.
     // Найсвіжіша посадка з мобільного застосунку (PlantingController) визначає
     // "поточну" рослину; якщо жодної ще не заведено (свіжа БД без онбордингу),
     // відкочуємось на статичний Plant:Name з appsettings.json — той самий засів,
@@ -174,50 +216,6 @@ public class AiAgronomistService : BackgroundService
 
     private string ResolvePlantName(Planting? planting) =>
         string.IsNullOrWhiteSpace(planting?.PlantName) ? _plantOptions.Name : planting.PlantName;
-
-    private async Task<string?> DetectSustainedAnomalyAsync(CancellationToken stoppingToken)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-        var plantName = ResolvePlantName(await GetCurrentPlantingAsync(db, stoppingToken));
-        var profile = await db.PlantProfiles.FirstOrDefaultAsync(p => p.PlantName == plantName, stoppingToken);
-        if (profile is null)
-        {
-            return null;
-        }
-
-        var windowStart = DateTime.UtcNow - TimeSpan.FromMinutes(_agronomistOptions.SustainedExcursionMinutes);
-        var records = await db.Telemetries
-            .Where(t => t.Timestamp >= windowStart)
-            .OrderBy(t => t.Timestamp)
-            .ToListAsync(stoppingToken);
-
-        return CheckExcursion("Temperature", records.Select(t => t.TemperatureC), profile.TempMinC, profile.TempMaxC, "C")
-            ?? CheckExcursion("Humidity", records.Select(t => t.HumidityPct), profile.HumidityMinPct, profile.HumidityMaxPct, "%")
-            ?? CheckExcursion("SoilMoisture", records.Select(t => t.SoilMoisturePct), profile.SoilMoistureMinPct,
-                profile.SoilMoistureMaxPct, "%");
-    }
-
-    private string? CheckExcursion(string metricName, IEnumerable<double?> values, double min, double max, string suffix)
-    {
-        var points = values.Where(v => v.HasValue).Select(v => v!.Value).ToList();
-        if (points.Count < MinSustainedReadings)
-        {
-            return null;
-        }
-
-        var allBelow = points.All(v => v < min);
-        var allAbove = points.All(v => v > max);
-        if (!allBelow && !allAbove)
-        {
-            return null;
-        }
-
-        return $"{metricName} has been {(allBelow ? "below" : "above")} the ideal range ({min:0.#}-{max:0.#}{suffix}) for " +
-            $"all {points.Count} readings over the last {_agronomistOptions.SustainedExcursionMinutes} minutes (ranged " +
-            $"{points.Min():0.#}-{points.Max():0.#}{suffix}).";
-    }
 
     // Останній реально опублікований стан актуаторів (з AiDecisions — байдуже,
     // від локального контролера чи від будь-чого іншого) — щоб примусове
@@ -231,8 +229,68 @@ public class AiAgronomistService : BackgroundService
         return latest is null ? (false, false, 0, 0) : (latest.PumpOn, latest.FanOn, latest.LightBrightness, latest.SoilHeaterPower);
     }
 
-    private async Task RunProfileAnalysisAsync(CancellationToken stoppingToken, string? earlyTriggerReason)
+    // Одна повна спроба отримати кадр з ESP32-CAM. Повертає null, якщо камера
+    // недоступна або віддала порожньо навіть після примусової підсвітки.
+    //
+    // ESP32 повертає 204 без тіла, якщо сам вважає, що зараз ніч (замало Lux для
+    // корисного кадру) — GetByteArrayAsync у такому разі не кидає виняток, а
+    // віддає порожній масив. Тоді примусово вмикаємо підсвітку на максимум,
+    // чекаємо, поки прошивка це помітить (isNight оновлюється раз на
+    // SENSOR_READ_INTERVAL_MS=60с — чекаємо з запасом), і пробуємо ще раз. Після
+    // спроби одразу повертаємо світло (і pump/fan/heater) до стану, який реально
+    // був до цього, а не лишаємо ввімкненим до наступного тіку локального контролера.
+    private async Task<byte[]?> TryCapturePhotoAsync(CancellationToken stoppingToken)
     {
+        byte[] imageBytes;
+        try
+        {
+            imageBytes = await _cameraHttpClient.GetByteArrayAsync(_esp32Options.CameraUrl, stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to capture image from ESP32-CAM at {CameraUrl}", _esp32Options.CameraUrl);
+            return null;
+        }
+
+        if (imageBytes.Length == 0)
+        {
+            var previousDecision = await GetLatestActuatorStateAsync(stoppingToken);
+
+            _logger.LogInformation("No photo (likely night per ESP32) — forcing grow light on for a proper shot and retrying");
+            await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, 255, previousDecision.SoilHeaterPower)));
+
+            await Task.Delay(TimeSpan.FromSeconds(65), stoppingToken);
+
+            try
+            {
+                imageBytes = await _cameraHttpClient.GetByteArrayAsync(_esp32Options.CameraUrl, stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Retry photo capture after forcing light on failed");
+                imageBytes = Array.Empty<byte>();
+            }
+
+            await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.LightBrightness,
+                    previousDecision.SoilHeaterPower)));
+        }
+
+        if (imageBytes.Length == 0)
+        {
+            return null;
+        }
+
+        _logger.LogInformation("Downloaded {ByteCount} bytes from ESP32 camera at {CameraUrl}",
+            imageBytes.Length, _esp32Options.CameraUrl);
+        return imageBytes;
+    }
+
+    private async Task RunProfileAnalysisAsync(
+        CancellationToken stoppingToken, ProfileReviewKind kind, string lastUpdateReason)
+    {
+        var requirePhoto = kind == ProfileReviewKind.ScheduledDaily;
         var trendWindow = TimeSpan.FromMinutes(_agronomistOptions.TrendWindowMinutes);
         var trendBucket = TimeSpan.FromMinutes(_agronomistOptions.TrendBucketMinutes);
         var windowStart = DateTime.UtcNow - trendWindow;
@@ -291,61 +349,49 @@ public class AiAgronomistService : BackgroundService
             "Trend for this profile analysis: {PointCount} points over the last {Window}:\n{TrendText}",
             trend.Count, trendWindow, trendText);
 
-        byte[] imageBytes;
-        try
+        // Плановий (щоденний) огляд не виконується без свіжого фото: якщо камера
+        // недоступна / затемно, добираємо кадр кожні PhotoRetryIntervalMinutes,
+        // поки від старту огляду не мине PhotoRetryWindowMinutes, після чого цей
+        // день пропускаємо (профіль лишається без змін). Bootstrap фото не
+        // вимагає — краще профіль на самих сенсорах, ніж бездіяльні актуатори.
+        var photoDeadlineUtc = DateTime.UtcNow + TimeSpan.FromMinutes(_agronomistOptions.PhotoRetryWindowMinutes);
+        var imageBytes = await TryCapturePhotoAsync(stoppingToken);
+        while (imageBytes is null && requirePhoto && DateTime.UtcNow < photoDeadlineUtc)
         {
-            imageBytes = await _cameraHttpClient.GetByteArrayAsync(_esp32Options.CameraUrl, stoppingToken);
+            _logger.LogInformation(
+                "Scheduled review needs a photo but none available yet — retrying in {Interval} min",
+                _agronomistOptions.PhotoRetryIntervalMinutes);
+            await Task.Delay(TimeSpan.FromMinutes(_agronomistOptions.PhotoRetryIntervalMinutes), stoppingToken);
+            imageBytes = await TryCapturePhotoAsync(stoppingToken);
         }
-        catch (Exception ex)
+
+        if (imageBytes is null && requirePhoto)
         {
-            _logger.LogWarning(ex, "Failed to capture image from ESP32-CAM at {CameraUrl}", _esp32Options.CameraUrl);
+            _logger.LogWarning(
+                "No photo from ESP32 camera within {Window} min of the scheduled review — skipping today's profile " +
+                "analysis, profile left unchanged", _agronomistOptions.PhotoRetryWindowMinutes);
             return;
         }
 
-        // ESP32 повертає 204 без тіла, якщо сам вважає, що зараз ніч (замало Lux
-        // для корисного кадру) — GetByteArrayAsync у такому разі не кидає виняток,
-        // а віддає порожній масив. Замість того щоб змиритись з відсутністю фото,
-        // примусово вмикаємо підсвітку на максимум, чекаємо, поки прошивка сама це
-        // помітить (isNight оновлюється раз на SENSOR_READ_INTERVAL_MS=60с у
-        // прошивці — чекаємо з запасом), і пробуємо ще раз. Після знімку одразу
-        // повертаємо світло (і pump/fan) до того стану, який реально був до цього,
-        // а не лишаємо ввімкненим до наступного тіку локального контролера.
-        if (imageBytes.Length == 0)
-        {
-            var previousDecision = await GetLatestActuatorStateAsync(stoppingToken);
-
-            _logger.LogInformation("No photo (likely night per ESP32) — forcing grow light on for a proper shot and retrying");
-            await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
-                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, 255, previousDecision.SoilHeaterPower)));
-
-            await Task.Delay(TimeSpan.FromSeconds(65), stoppingToken);
-
-            try
-            {
-                imageBytes = await _cameraHttpClient.GetByteArrayAsync(_esp32Options.CameraUrl, stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Retry photo capture after forcing light on failed");
-                imageBytes = Array.Empty<byte>();
-            }
-
-            await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
-                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.LightBrightness,
-                    previousDecision.SoilHeaterPower)));
-        }
-
-        _logger.LogInformation("Downloaded {ByteCount} bytes from ESP32 camera at {CameraUrl}",
-            imageBytes.Length, _esp32Options.CameraUrl);
-
-        var hasPhoto = imageBytes.Length > 0;
-        var base64Image = hasPhoto ? Convert.ToBase64String(imageBytes) : null;
+        var hasPhoto = imageBytes is { Length: > 0 };
+        var base64Image = hasPhoto ? Convert.ToBase64String(imageBytes!) : null;
 
         var photoInstruction = hasPhoto
             ? "Analyze this plant photo together with the sensor trend below, using it to judge what is actually normal or " +
               "concerning for this specific species — not generic assumptions. "
             : "No photo was available this time (the camera doesn't capture at night, when ambient light is too low for a " +
               "useful frame) — base your review on the sensor trend and history alone. ";
+
+        // Контекст посадки йде В КОЖНОМУ огляді (не лише в першому), щоб Gemini
+        // міг судити про етап розвитку за віком рослини, а не лише за фото.
+        var daysSincePlanting = planting is not null
+            ? Math.Max(0, (int)(DateTime.UtcNow - planting.PlantedDateUtc).TotalDays)
+            : (int?)null;
+        var plantingContextParagraph = planting is not null
+            ? $"Planting: {ResolvePlantName(planting)}, planted {planting.PlantedDateUtc:yyyy-MM-dd} ({daysSincePlanting} " +
+              $"days ago), grown in {(string.IsNullOrWhiteSpace(planting.SoilType) ? "unspecified soil" : planting.SoilType)}. " +
+              $"Grower's notes: {(string.IsNullOrWhiteSpace(planting.Notes) ? "(none provided)" : planting.Notes)}\n\n"
+            : $"Grower's notes: {(string.IsNullOrWhiteSpace(_plantOptions.CareNotes) ? "(none provided)" : _plantOptions.CareNotes)}\n\n";
 
         var currentProfileParagraph = profile is not null
             ? $"You previously set this profile (last updated {profile.LastUpdatedUtc:yyyy-MM-dd HH:mm} UTC, reason: " +
@@ -356,6 +402,7 @@ public class AiAgronomistService : BackgroundService
               $"- SoilTempMinC: {profile.SoilTempMinC:0.#}C\n" +
               $"- SoilTempMaxC: {profile.SoilTempMaxC:0.#}C\n" +
               $"- DailyLightHoursTarget: {profile.DailyLightHoursTarget:0.#}h\n" +
+              $"- GrowthStage: {(string.IsNullOrWhiteSpace(profile.GrowthStage) ? "(not assessed yet)" : profile.GrowthStage)}\n" +
               $"- Notes: {profile.Notes}\n\n" +
               "Reassess based on everything below — the trend, and the actuator history (what the automated local rules " +
               "actually did while using these ranges). Keep values that are still working, adjust ones that aren't. The soil " +
@@ -363,23 +410,13 @@ public class AiAgronomistService : BackgroundService
               "so if the watering history looks wrong for how the plant actually looks in the photo (watering too often/too " +
               "rarely relative to visible plant health), nudge SoilMoistureMinPct/MaxPct to compensate rather than leaving " +
               "them stale.\n\n"
-            : $"This is the first time a profile is being set for {ResolvePlantName(planting)}. " +
-              (planting is not null
-                  ? $"Planted on {planting.PlantedDateUtc:yyyy-MM-dd} in {(string.IsNullOrWhiteSpace(planting.SoilType) ? "unspecified soil" : planting.SoilType)}. " +
-                    $"Grower's notes: {(string.IsNullOrWhiteSpace(planting.Notes) ? "(none provided)" : planting.Notes)}\n\n"
-                  : $"Grower's notes: {(string.IsNullOrWhiteSpace(_plantOptions.CareNotes) ? "(none provided)" : _plantOptions.CareNotes)}\n\n");
-
-        var earlyTriggerParagraph = earlyTriggerReason is not null
-            ? $"NOTE: this review is running earlier than the normal {_agronomistOptions.ProfileAnalysisIntervalMinutes}-" +
-              $"minute schedule because a sensor reading has been persistently outside the current profile range: " +
-              $"{earlyTriggerReason}\n\n"
-            : string.Empty;
+            : $"This is the first time a profile is being set for {ResolvePlantName(planting)}.\n\n";
 
         var prompt =
             $"You are an AI Agronomist responsible for setting the ideal growing parameters for a greenhouse growing " +
             $"{ResolvePlantName(planting)}. " + photoInstruction +
             $"Current local time: {DateTime.Now:yyyy-MM-dd HH:mm} ({DateTime.Now:dddd}).\n\n" +
-            earlyTriggerParagraph +
+            plantingContextParagraph +
             currentProfileParagraph +
             $"Sensor trend summary over the last {(int)trendWindow.TotalHours}h (Δ = change from earliest to latest reading):" +
             $"\n{trendSummaryText}\n\n" +
@@ -401,11 +438,15 @@ public class AiAgronomistService : BackgroundService
             "zone and stave off root rot, easing off as moisture falls back to SoilMoistureMaxPct and as soil temperature " +
             "rises toward SoilTempMaxC, with a hard cut at SoilTempMaxC. So SoilTempMaxC is a live control setpoint (keep " +
             "it a few C above SoilTempMinC with real headroom, never at or below it) and SoilMoistureMaxPct now drives an " +
-            "actuator, not just an alert. Make all ranges realistic operating targets, not aspirational extremes. Reply " +
-            "strictly in JSON matching this schema: { \"TempMinC\": number, \"TempMaxC\": number, \"HumidityMinPct\": " +
-            "number, \"HumidityMaxPct\": number, \"SoilMoistureMinPct\": number, \"SoilMoistureMaxPct\": number, " +
-            "\"SoilTempMinC\": number, \"SoilTempMaxC\": number, \"DailyLightHoursTarget\": number, \"Notes\": \"short " +
-            "rationale, referencing what changed since last time if applicable\" } without markdown code blocks.";
+            "actuator, not just an alert. Make all ranges realistic operating targets, not aspirational extremes. Also " +
+            "assess the plant's current phenological growth stage from the photo, the days since planting, and the trend " +
+            "(e.g. seedling, vegetative, flowering, fruiting, senescing) and take it into account when choosing the ranges. " +
+            "Reply strictly in JSON matching this schema: { \"TempMinC\": number, \"TempMaxC\": number, " +
+            "\"HumidityMinPct\": number, \"HumidityMaxPct\": number, \"SoilMoistureMinPct\": number, " +
+            "\"SoilMoistureMaxPct\": number, \"SoilTempMinC\": number, \"SoilTempMaxC\": number, " +
+            "\"DailyLightHoursTarget\": number, \"GrowthStage\": \"current growth stage plus a few words on how you can " +
+            "tell\", \"Notes\": \"short rationale, referencing what changed since last time if applicable\" } without " +
+            "markdown code blocks.";
 
         var parts = new List<object> { new { text = prompt } };
         if (hasPhoto)
@@ -447,10 +488,10 @@ public class AiAgronomistService : BackgroundService
 
         _logger.LogInformation(
             "AI profile analysis: Temp {TempMin}-{TempMax}C, Humidity {HumMin}-{HumMax}%, SoilMoisture {SoilMin}-{SoilMax}%, " +
-            "SoilTemp {SoilTempMin}-{SoilTempMax}C, DailyLight {Light}h. Notes: {Notes}",
+            "SoilTemp {SoilTempMin}-{SoilTempMax}C, DailyLight {Light}h. GrowthStage: {GrowthStage}. Notes: {Notes}",
             analysis.TempMinC, analysis.TempMaxC, analysis.HumidityMinPct, analysis.HumidityMaxPct,
             analysis.SoilMoistureMinPct, analysis.SoilMoistureMaxPct, analysis.SoilTempMinC, soilTempMaxC,
-            analysis.DailyLightHoursTarget, analysis.Notes);
+            analysis.DailyLightHoursTarget, analysis.GrowthStage, analysis.Notes);
 
         try
         {
@@ -473,9 +514,10 @@ public class AiAgronomistService : BackgroundService
             tracked.SoilTempMinC = analysis.SoilTempMinC;
             tracked.SoilTempMaxC = soilTempMaxC;
             tracked.DailyLightHoursTarget = analysis.DailyLightHoursTarget;
+            tracked.GrowthStage = analysis.GrowthStage ?? string.Empty;
             tracked.Notes = analysis.Notes;
             tracked.LastUpdatedUtc = DateTime.UtcNow;
-            tracked.LastUpdateReason = earlyTriggerReason is null ? "Scheduled daily review" : $"Early review: {earlyTriggerReason}";
+            tracked.LastUpdateReason = lastUpdateReason;
 
             await db.SaveChangesAsync(stoppingToken);
             await _hub.Clients.All.SendAsync("PlantProfileReceived", tracked, stoppingToken);
@@ -1053,6 +1095,7 @@ public class AiAgronomistService : BackgroundService
         double SoilTempMinC,
         double SoilTempMaxC,
         double DailyLightHoursTarget,
+        string GrowthStage,
         string Notes);
 
     private record GeminiGenerateContentResponse(
