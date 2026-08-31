@@ -59,7 +59,12 @@ void setup() {
     // тож захист спрацює автоматично незалежно від того, чи прийде ще
     // якась команда з мережі.
     actuators.setPump(cmd.pumpOn);
-    actuators.setFan(cmd.fanOn);
+    // Нагрівач повітря без обдуву не має сенсу: гаряче повітря застоюється біля
+    // елемента, датчик його не бачить, тепло не розходиться. Тож будь-яка
+    // ненульова потужність нагрівача примусово вмикає вентилятор, незалежно від
+    // того, що надіслав бекенд (локальний контролер це вже враховує, але ручні
+    // команди з застосунку — ні).
+    actuators.setFan(cmd.fanOn || cmd.airHeaterPower > 0);
     actuators.setLight(cmd.lightBrightness);
     actuators.setSoilHeater(cmd.soilHeaterPower);
     actuators.setAirHeater(cmd.airHeaterPower);

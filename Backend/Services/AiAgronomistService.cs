@@ -942,6 +942,17 @@ public class AiAgronomistService : BackgroundService
             airHeaterPower = _agronomistOptions.AirHeaterMaxPower;
         }
 
+        // Гріти повітря без обдуву немає сенсу: гаряче повітря стоїть біля
+        // елемента, датчик його не "бачить", тепло не розходиться по обʼєму. Тож
+        // поки повітряний нагрівач працює — вентилятор примусово увімкнено
+        // (циркуляція, не охолодження). ESP32 оновлює FAN_MAX_RUNTIME_MS на кожну
+        // "on"-команду, тож безперервна робота разом із нагрівачем безпечна.
+        if (airHeaterPower > 0 && !fanOn)
+        {
+            fanOn = true;
+            fanReason += $"; forced On (air heater circulation at {airHeaterPower})";
+        }
+
         var reason = $"{fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}; {airHeaterReason}";
 
         var decisionRecord = new AiDecisionRecord
