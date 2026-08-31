@@ -35,11 +35,19 @@ constexpr int SOIL_RAW_WET = 1270;
 constexpr int SOIL_RAW_DRY = 4095;
 
 // ---- Ґрунтовий термодатчик (DS18B20, OneWire) ----
-// GPIO38: перший вільний пін поза зайнятими — камера тримає 4-13/15-18,
-// I2C-шина сенсорів 1-2, аналоговий вхід ґрунту 3, актуатори 21/45/47; на
-// цьому модулі (N16R8, октальна PSRAM/flash) GPIO26-37 зайняті внутрішньою
-// шиною пам'яті, тож 38+ — перший безпечний діапазон для нової периферії.
-constexpr int SOIL_TEMP_ONEWIRE_PIN = 38;
+// GPIO21: МАЄ бути пін <= 33. Бібліотека paulstoffregen/OneWire 2.3.8 у
+// util/OneWire_direct_gpio.h (directModeOutput, рядок ~240) має перевірку
+// `pin <= 33` — успадковану від ESP32 classic, де GPIO34-39 були тільки
+// входами. На пінах >33 функція мовчки нічого не робить: лінія ніколи не
+// перемикається у вихід, reset-імпульс не формується, presence немає,
+// reset()==0, getDeviceCount()==0. На ESP32-S3 усі GPIO двонапрямлені, але
+// бібліотека цього не враховує — тож GPIO38/39/40/41 тут не годяться.
+// GPIO21 звільнено з-під вентилятора (той перенесено на GPIO40): вентилятор
+// керується через digitalWrite() ядра Arduino, яке коректно працює на пінах
+// >33, тож саме він, а не OneWire, іде на "високий" пін. Решта пінів <=33
+// зайнята: камера 4-13/15-18, 26-37 октальна PSRAM/flash, 1-3 сенсори/ADC,
+// 45/47 світло/помпа, 19/20 USB, 0/3 strapping.
+constexpr int SOIL_TEMP_ONEWIRE_PIN = 21;
 
 // ---- Підігрів ґрунту (DC грілка-мат через MOSFET-модуль, ШІМ) ----
 // GPIO39: наступний вільний пін одразу за SOIL_TEMP_ONEWIRE_PIN (38), той
@@ -60,7 +68,12 @@ constexpr unsigned long SOIL_HEATER_MAX_RUNTIME_MS = 900000;
 
 // ---- Актуатори ----
 constexpr int PUMP_RELAY_PIN = 47;
-constexpr int FAN_PIN = 21;
+// GPIO40: перенесено з GPIO21 (той відданий під OneWire-датчик ґрунту, якому
+// потрібен пін <=33 — див. SOIL_TEMP_ONEWIRE_PIN). Вентилятор — простий
+// цифровий вихід через digitalWrite() ядра Arduino, яке коректно драйвить
+// піни >33, тож "високий" пін безпечний саме для нього. GPIO40 за
+// замовчуванням JTAG MTDO, але як звичайний GPIO працює.
+constexpr int FAN_PIN = 40;
 
 // Grow light: 24V біла стрічка (Philips Hue Lightstrip, RGB+TW), але з неї
 // використовуються лише окремі аналогові канали Cold White (C) і Warm White
@@ -75,8 +88,15 @@ constexpr int LED_PWM_CHANNEL = 4; // канали 0/timer 0 зайняті ка
 constexpr int LED_PWM_FREQ_HZ = 5000;
 constexpr int LED_PWM_RESOLUTION_BITS = 8; // яскравість 0-255
 
-// Захисний ліміт: помпа автоматично вимикається, якщо працює довше цього
-// часу (запобіжник від "залипання" реле/зависання команди).
+// Штатна тривалість одного "пострілу" поливу: помпа вмикається імпульсом саме
+// на цей час, а вимиканням керує сама прошивка (ActuatorService::update()
+// щоцикл loop()) — бекенду достатньо надіслати pump_on:true, окрема команда
+// "вимкнути" не потрібна. МАЄ лишатися меншим за PUMP_MAX_RUNTIME_MS.
+constexpr unsigned long PUMP_RUN_DURATION_MS = 1000;
+
+// Аварійний ліміт (backstop): якщо штатне вимкнення вище чомусь не спрацювало
+// (баг у логіці, "залипання" реле, зависання команди) — помпа примусово
+// гаситься через цей час. У нормі не досягається ніколи.
 constexpr unsigned long PUMP_MAX_RUNTIME_MS = 5000;
 
 // Той самий захист для вентилятора, але інша семантика, ніж у помпи: тут це
@@ -105,8 +125,15 @@ constexpr float NIGHT_LUX_THRESHOLD = 5.0f;
 // Читання/лог сенсорів і публікація в MQTT навмисно розведені: читаємо й
 // логуємо часто (для живого спостереження в Serial), а публікуємо в MQTT
 // рідше (щоб не заливати брокер/БД телеметрії зайвими точками).
+//
+// Публікація 3 хв (було 10): бекенд тепер реагує на телеметрію подієво
+// (AiAgronomistService.RunLocalControlSignalLoopAsync), тож частіші дані =
+// швидша реакція актуаторів і статистично надійніші вікна трендів
+// (SoilMoistureTrendWindowMinutes=30 отримує ~10 точок замість ~3). ~480
+// рядків/добу в таблиці телеметрії — денний промпт Gemini не роздувається,
+// DownsampleTrend усе одно групує в 60-хв бакети.
 constexpr unsigned long SENSOR_READ_INTERVAL_MS = 60000;
-constexpr unsigned long MQTT_PUBLISH_INTERVAL_MS = 600000;
+constexpr unsigned long MQTT_PUBLISH_INTERVAL_MS = 180000;
 constexpr unsigned long LIGHT_CHECK_INTERVAL_MS = 1000;
 constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 10000;
 constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;

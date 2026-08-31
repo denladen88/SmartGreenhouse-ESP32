@@ -4,6 +4,7 @@
     "SmartGreenhouse.Backend": {
       "commandName": "Project",
       "dotnetRunMessages": true,
+      "applicationUrl": "http://0.0.0.0:5080",
       "environmentVariables": {
         "DOTNET_ENVIRONMENT": "Development"
       }

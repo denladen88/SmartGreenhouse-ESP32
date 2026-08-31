@@ -1,5 +1,11 @@
+using Microsoft.EntityFrameworkCore;
+
 namespace SmartGreenhouse.Backend.Models;
 
+// Кожен запит локального контролера й аналізу профілю фільтрує/сортує за
+// Timestamp; дедуп передоставки бере найсвіжіший запис пристрою. Індекс тримає
+// це швидким, поки таблиця росте (навіть з DataRetentionService).
+[Index(nameof(Timestamp))]
 public class TelemetryRecord
 {
     public Guid Id { get; set; } = Guid.NewGuid();

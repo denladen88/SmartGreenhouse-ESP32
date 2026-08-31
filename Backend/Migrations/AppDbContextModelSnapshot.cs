@@ -51,6 +51,8 @@ namespace SmartGreenhouse.Backend.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Timestamp");
+
                     b.ToTable("AiDecisions");
                 });
 
@@ -62,6 +64,10 @@ namespace SmartGreenhouse.Backend.Migrations
 
                     b.Property<double>("DailyLightHoursTarget")
                         .HasColumnType("REAL");
+
+                    b.Property<string>("GrowthStage")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
 
                     b.Property<double>("HumidityMaxPct")
                         .HasColumnType("REAL");
@@ -90,6 +96,9 @@ namespace SmartGreenhouse.Backend.Migrations
                     b.Property<double>("SoilMoistureMinPct")
                         .HasColumnType("REAL");
 
+                    b.Property<double>("SoilTempMaxC")
+                        .HasColumnType("REAL");
+
                     b.Property<double>("SoilTempMinC")
                         .HasColumnType("REAL");
 
@@ -102,6 +111,35 @@ namespace SmartGreenhouse.Backend.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("PlantProfiles");
+                });
+
+            modelBuilder.Entity("SmartGreenhouse.Backend.Models.Planting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PlantName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PlantedDateUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SoilType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Plantings");
                 });
 
             modelBuilder.Entity("SmartGreenhouse.Backend.Models.TelemetryRecord", b =>
@@ -142,6 +180,8 @@ namespace SmartGreenhouse.Backend.Migrations
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("Timestamp");
 
                     b.ToTable("Telemetries");
                 });

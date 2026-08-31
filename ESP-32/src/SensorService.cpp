@@ -27,6 +27,10 @@ bool SensorService::begin() {
     Serial.println("[BH1750] Помилка: BH1750 не знайдено!");
   }
 
+  // OneWire-пін МАЄ бути <= 33: paulstoffregen/OneWire 2.3.8 у
+  // util/OneWire_direct_gpio.h (directModeOutput) для пінів >33 мовчки не
+  // перемикає лінію у вихід — reset-імпульс не формується, getDeviceCount()
+  // повертає 0. Див. коментар біля SOIL_TEMP_ONEWIRE_PIN у Config.h.
   _oneWire.begin(SOIL_TEMP_ONEWIRE_PIN);
   _dallasTemp.begin();
   // 9-біт (крок 0.5°C) замість дефолтних 12-біт: конверсія займає ~94мс

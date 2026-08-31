@@ -20,6 +20,15 @@ void ActuatorService::begin() {
 }
 
 void ActuatorService::update() {
+  // Штатне вимкнення: кожне ввімкнення помпи — фіксований імпульс
+  // PUMP_RUN_DURATION_MS (один "постріл" поливу). _pumpStartMs виставляється в
+  // setPump() на переході OFF->ON, тож повторні pump_on під час роботи імпульс
+  // не подовжують.
+  if (_pumpOn && (millis() - _pumpStartMs >= PUMP_RUN_DURATION_MS)) {
+    Serial.printf("[ПОМПА] Імпульс поливу завершено (%lu мс).\n", PUMP_RUN_DURATION_MS);
+    setPump(false);
+  }
+
   // Аварійне вимкнення: якщо помпа увімкнена довше PUMP_MAX_RUNTIME_MS,
   // примусово гасимо її незалежно від того, хто й чому її увімкнув.
   if (_pumpOn && (millis() - _pumpStartMs >= PUMP_MAX_RUNTIME_MS)) {

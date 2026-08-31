@@ -1,10 +1,13 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Extensions.ManagedClient;
 using SmartGreenhouse.Backend.Data;
+using SmartGreenhouse.Backend.Hubs;
 using SmartGreenhouse.Backend.Models;
 
 namespace SmartGreenhouse.Backend.Services;
@@ -15,15 +18,21 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly MqttOptions _options;
     private readonly IManagedMqttClient _mqttClient;
+    private readonly IHubContext<TelemetryHub> _hub;
+    private readonly TelemetrySignal _telemetrySignal;
 
     public MqttBackgroundService(
         ILogger<MqttBackgroundService> logger,
         IServiceScopeFactory scopeFactory,
-        IOptions<MqttOptions> options)
+        IOptions<MqttOptions> options,
+        IHubContext<TelemetryHub> hub,
+        TelemetrySignal telemetrySignal)
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
         _options = options.Value;
+        _hub = hub;
+        _telemetrySignal = telemetrySignal;
 
         var factory = new MqttFactory();
         _mqttClient = factory.CreateManagedMqttClient();
@@ -106,7 +115,25 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            db.Telemetries.Add(new TelemetryRecord
+            // Дедуп передоставки: ManagedMqttClient на реконнекті перепідтверджує
+            // підписку, і брокер повторно віддає retained/чергові повідомлення —
+            // те саме повідомлення прилітало по кілька разів (спостерігалось
+            // раніше). UptimeMs (millis() на ESP на момент публікації) не може
+            // легітимно збігтися у двох різних публікацій; збіг із НАЙСВІЖІШИМ
+            // записом цього пристрою = передоставка. Скидання лічильника при
+            // перезавантаженні ESP не заважає — нове UptimeMs завжди менше.
+            var lastUptimeMs = await db.Telemetries
+                .Where(t => t.DeviceId == telemetry.DeviceId)
+                .OrderByDescending(t => t.Timestamp)
+                .Select(t => (long?)t.UptimeMs)
+                .FirstOrDefaultAsync();
+            if (lastUptimeMs == telemetry.UptimeMs && telemetry.UptimeMs != 0)
+            {
+                _logger.LogDebug("Duplicate telemetry (UptimeMs={UptimeMs}) — MQTT redelivery, skipping", telemetry.UptimeMs);
+                return;
+            }
+
+            var record = new TelemetryRecord
             {
                 DeviceId = telemetry.DeviceId,
                 UptimeMs = telemetry.UptimeMs,
@@ -117,9 +144,15 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
                 SoilRaw = telemetry.SoilRaw,
                 SoilMoisturePct = telemetry.SoilMoisturePct,
                 SoilTempC = telemetry.SoilTempC
-            });
+            };
+            db.Telemetries.Add(record);
 
             await db.SaveChangesAsync();
+            await _hub.Clients.All.SendAsync("TelemetryReceived", record);
+
+            // Новий запис у БД — будимо локальний контролер, щоб він відреагував
+            // одразу, а не на наступному тіку свого fallback-таймера.
+            _telemetrySignal.Notify();
         }
         catch (Exception ex)
         {

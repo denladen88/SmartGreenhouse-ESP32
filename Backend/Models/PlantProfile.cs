@@ -26,11 +26,27 @@ public class PlantProfile
     public double SoilMoistureMaxPct { get; set; }
 
     // Локальне правило підігріву (AiAgronomistService.RunLocalControlAsync) тримає
-    // ґрунт не нижче цього порогу пропорційним ШІМ (немає верхньої межі — нагрівач
-    // лише додає тепло, не охолоджує, тож перегріву від власної роботи не буває).
+    // ґрунт не нижче цього порогу пропорційним ШІМ.
     public double SoilTempMinC { get; set; }
 
+    // Верхня межа температури кореневої зони: локальне правило підігріву обриває
+    // нагрівач, щойно SoilTempC її досягає. Потрібна, бо нагрівач тепер вмикається
+    // не лише для добору SoilTempMinC, а й щоб просушити перезволожений ґрунт
+    // (SoilMoisturePct стійко вище SoilMoistureMaxPct) — без цієї стелі "сушіння
+    // теплом" могло б перегріти корені. Потужність просушки лінійно спадає до нуля
+    // на останніх SoilDryingCeilingTaperC °C перед стелею, тож підхід до неї
+    // м'який, а не різкий обрив. 0 (чи <= SoilTempMinC) = профіль ще не задав межу,
+    // тоді просушка вимкнена, а нагрів працює лише за старим правилом дефіциту.
+    public double SoilTempMaxC { get; set; }
+
     public double DailyLightHoursTarget { get; set; }
+
+    // Фенологічна стадія рослини на момент останнього огляду (seedling /
+    // vegetative / flowering / fruiting / senescing тощо) — Gemini оцінює її з
+    // фото + днів від посадки + тренду і повертає окремим полем. Локальний
+    // контролер її не читає; це контекст для наступного огляду і для показу в
+    // застосунках.
+    public string GrowthStage { get; set; } = string.Empty;
 
     public string Notes { get; set; } = string.Empty;
     public DateTime LastUpdatedUtc { get; set; } = DateTime.UtcNow;

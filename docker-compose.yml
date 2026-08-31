@@ -4,6 +4,8 @@ services:
     restart: unless-stopped
     env_file:
       - ./Backend/.env
+    ports:
+      - "8080:8080"
     volumes:
       - ./Backend/appdata:/app/data
     # If the container can't reach the MQTT broker / ESP32-CAM on the LAN
