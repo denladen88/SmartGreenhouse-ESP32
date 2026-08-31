@@ -1,13 +1,20 @@
 services:
   backend:
-    build: ./Backend
+    image: ghcr.io/denladen88/smartgreenhouse-backend:latest
+    build:
+      context: .
+      dockerfile: Backend/Dockerfile
     restart: unless-stopped
     env_file:
-      - ./Backend/.env
+      - path: ./Backend/.env
+        required: false
     ports:
       - "8080:8080"
     volumes:
-      - ./Backend/appdata:/app/data
-    # If the container can't reach the MQTT broker / ESP32-CAM on the LAN
-    # with default bridge networking, uncomment instead:
+      - greenhouse_data:/app/data
+    # Якщо контейнер не бачить MQTT-брокер / ESP32-CAM у LAN
+    # за стандартною bridge-мережею — розкоментуй:
     # network_mode: host
+
+volumes:
+  greenhouse_data:

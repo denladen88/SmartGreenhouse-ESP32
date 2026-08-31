@@ -1,0 +1,35 @@
+# git / CI
+.git
+.github
+.gitignore
+
+# Node
+**/node_modules
+**/dist
+
+# .NET build output (зберемо заново всередині образу)
+**/bin
+**/obj
+
+# Backend: рантайм-дані, не місце їм в образі
+Backend/.env
+Backend/wwwroot
+Backend/appdata
+Backend/Photos
+Backend/*.db
+Backend/*.db-shm
+Backend/*.db-wal
+Backend/*.db*.bak-*
+Backend/*.log
+
+# інші підпроєкти — Dockerfile їх не чіпає, нема сенсу вантажити в контекст
+ESP-32
+MobileApp
+SmartGreenhouse-Learn
+SmartGreenhouse.code-workspace
+
+# редактор / ОС
+**/.vscode
+**/.idea
+**/.DS_Store
+Thumbs.db
