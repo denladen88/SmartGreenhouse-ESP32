@@ -9,28 +9,33 @@ public:
 
   void begin();
 
-  // Викликати щоцикл loop(): перевіряє захисні таймери помпи й вентилятора
-  // (PUMP_MAX_RUNTIME_MS, FAN_MAX_RUNTIME_MS) і примусово вимикає їх при
-  // перевищенні.
+  // Викликати щоцикл loop(): перевіряє захисні таймери помпи, вентилятора та
+  // нагрівачів ґрунту й повітря (PUMP_MAX_RUNTIME_MS, FAN_MAX_RUNTIME_MS,
+  // SOIL_HEATER_MAX_RUNTIME_MS, AIR_HEATER_MAX_RUNTIME_MS) і примусово вимикає
+  // їх при перевищенні.
   void update();
 
   void setPump(bool on);
   void setFan(bool on);
   void setLight(uint8_t brightness); // 0 = вимкнено, 255 = максимальна яскравість
   void setSoilHeater(uint8_t power);  // 0 = вимкнено, 255 = максимальна потужність
+  void setAirHeater(uint8_t power);   // 0 = вимкнено, 255 = максимальна потужність
 
   bool isPumpOn() const { return _pumpOn; }
   bool isFanOn() const { return _fanOn; }
   bool isLightOn() const { return _lightBrightness > 0; }
   bool isSoilHeaterOn() const { return _soilHeaterPower > 0; }
+  bool isAirHeaterOn() const { return _airHeaterPower > 0; }
 
 private:
   bool _pumpOn = false;
   bool _fanOn = false;
   uint8_t _lightBrightness = 0;
   uint8_t _soilHeaterPower = 0;
+  uint8_t _airHeaterPower = 0;
 
   unsigned long _pumpStartMs = 0;       // millis() моменту останнього вмикання помпи
   unsigned long _fanStartMs = 0;        // millis() моменту останнього вмикання вентилятора
-  unsigned long _soilHeaterStartMs = 0; // millis() моменту останнього підтвердження нагрівача
+  unsigned long _soilHeaterStartMs = 0; // millis() моменту останнього підтвердження нагрівача ґрунту
+  unsigned long _airHeaterStartMs = 0;  // millis() моменту останнього підтвердження нагрівача повітря
 };

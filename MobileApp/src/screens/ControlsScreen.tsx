@@ -29,6 +29,7 @@ export function ControlsScreen() {
   const [fanOn, setFanOn] = useState(false);
   const [lightBrightness, setLightBrightness] = useState(0);
   const [soilHeaterPower, setSoilHeaterPower] = useState(0);
+  const [airHeaterPower, setAirHeaterPower] = useState(0);
 
   // Синхронізуємо локальний стан елементів керування з останнім відомим
   // рішенням (від AI чи попереднього override) лише один раз, коли воно
@@ -39,6 +40,7 @@ export function ControlsScreen() {
       setFanOn(latest.fanOn);
       setLightBrightness(latest.lightBrightness);
       setSoilHeaterPower(latest.soilHeaterPower);
+      setAirHeaterPower(latest.airHeaterPower);
     }
   }, [latest?.id]);
 
@@ -53,6 +55,7 @@ export function ControlsScreen() {
       fan_on: fanOn,
       light_brightness: Math.round(lightBrightness),
       soil_heater_power: Math.round(soilHeaterPower),
+      air_heater_power: Math.round(airHeaterPower),
     });
   };
 
@@ -87,6 +90,17 @@ export function ControlsScreen() {
           step={1}
           value={soilHeaterPower}
           onValueChange={setSoilHeaterPower}
+        />
+      </View>
+
+      <View style={styles.sliderBlock}>
+        <Text style={styles.label}>Потужність нагрівача повітря: {Math.round(airHeaterPower)}</Text>
+        <Slider
+          minimumValue={0}
+          maximumValue={255}
+          step={1}
+          value={airHeaterPower}
+          onValueChange={setAirHeaterPower}
         />
       </View>
 

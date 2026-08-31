@@ -22,6 +22,7 @@ export function ControlsPage() {
   const [fanOn, setFanOn] = useState(false);
   const [lightBrightness, setLightBrightness] = useState(0);
   const [soilHeaterPower, setSoilHeaterPower] = useState(0);
+  const [airHeaterPower, setAirHeaterPower] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -30,6 +31,7 @@ export function ControlsPage() {
       setFanOn(latest.fanOn);
       setLightBrightness(latest.lightBrightness);
       setSoilHeaterPower(latest.soilHeaterPower);
+      setAirHeaterPower(latest.airHeaterPower);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latest?.id]);
@@ -46,6 +48,7 @@ export function ControlsPage() {
       fan_on: fanOn,
       light_brightness: Math.round(lightBrightness),
       soil_heater_power: Math.round(soilHeaterPower),
+      air_heater_power: Math.round(airHeaterPower),
     });
   };
 
@@ -83,6 +86,17 @@ export function ControlsPage() {
           max={255}
           value={soilHeaterPower}
           onChange={(e) => setSoilHeaterPower(Number(e.target.value))}
+        />
+      </div>
+
+      <div className="slider-block">
+        <label>Потужність нагрівача повітря: {Math.round(airHeaterPower)}</label>
+        <input
+          type="range"
+          min={0}
+          max={255}
+          value={airHeaterPower}
+          onChange={(e) => setAirHeaterPower(Number(e.target.value))}
         />
       </div>
 

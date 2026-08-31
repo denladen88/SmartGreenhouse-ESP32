@@ -24,6 +24,7 @@ export interface AiDecisionRecord {
   fanOn: boolean;
   lightBrightness: number;
   soilHeaterPower: number;
+  airHeaterPower: number;
   reason: string;
   photoDescription: string;
 }
@@ -33,6 +34,7 @@ export interface AiCommand {
   fan_on: boolean;
   light_brightness: number;
   soil_heater_power: number;
+  air_heater_power: number;
 }
 
 export interface PlantProfile {

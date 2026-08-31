@@ -3,7 +3,7 @@ import React from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useApiClient } from '../api/hooks';
 import { Sparkline } from '../components/Sparkline';
-import type { PlantProfile, TelemetryRecord } from '../types';
+import type { AiDecisionRecord, PlantProfile, TelemetryRecord } from '../types';
 
 interface MetricCardProps {
   label: string;
@@ -58,14 +58,26 @@ export function DashboardScreen() {
     refetchInterval: 60 * 1000,
   });
 
+  // Останнє рішення локального контролера — поточний стан актуаторів прямо на
+  // дашборді. Той самий queryKey ['decisions','latest'], що патчить
+  // useLiveUpdates на кожен 'DecisionReceived' (api/signalr.ts), тож живі
+  // оновлення працюють без окремого підключення.
+  const decisionQuery = useQuery({
+    queryKey: ['decisions', 'latest'],
+    queryFn: () => api.get<AiDecisionRecord[]>('/api/decisions/history?count=1').then((r) => r?.[0] ?? null),
+    refetchInterval: 60 * 1000,
+  });
+
   const latest = latestQuery.data ?? null;
   const history = historyQuery.data ?? [];
   const profile = profileQuery.data ?? null;
+  const decision = decisionQuery.data ?? null;
 
   const refresh = () => {
     latestQuery.refetch();
     historyQuery.refetch();
     profileQuery.refetch();
+    decisionQuery.refetch();
   };
 
   const isError = latestQuery.isError || historyQuery.isError || profileQuery.isError;
@@ -145,6 +157,20 @@ export function DashboardScreen() {
         />
       </View>
 
+      {decision && (
+        <View style={styles.statusBox}>
+          <Text style={styles.profileTitle}>Актуатори</Text>
+          <Text style={styles.profileLine}>
+            Насос: {decision.pumpOn ? 'Увімк' : 'Вимк'} · Вентилятор: {decision.fanOn ? 'Увімк' : 'Вимк'} · Світло:{' '}
+            {decision.lightBrightness}
+          </Text>
+          <Text style={styles.profileLine}>
+            Нагрівач ґрунту: {decision.soilHeaterPower} · Нагрівач повітря: {decision.airHeaterPower}
+          </Text>
+          <Text style={styles.profileNotes}>{decision.reason}</Text>
+        </View>
+      )}
+
       {profile && (
         <View style={styles.profileBox}>
           <Text style={styles.profileTitle}>{profile.plantName}</Text>
@@ -186,6 +212,7 @@ const styles = StyleSheet.create({
   cardLabel: { fontSize: 12, color: '#666' },
   cardValue: { fontSize: 22, fontWeight: '700', marginVertical: 4 },
   profileBox: { marginTop: 8, padding: 14, backgroundColor: '#eef6ee', borderRadius: 12 },
+  statusBox: { marginTop: 8, padding: 14, backgroundColor: '#f7f7f7', borderRadius: 12 },
   profileTitle: { fontSize: 16, fontWeight: '600', marginBottom: 4 },
   profileLine: { fontSize: 13, color: '#333', marginBottom: 2 },
   profileNotes: { fontSize: 12, color: '#555', marginTop: 6, fontStyle: 'italic' },

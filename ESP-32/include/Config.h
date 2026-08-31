@@ -66,6 +66,24 @@ constexpr int SOIL_HEATER_PWM_RESOLUTION_BITS = 8; // потужність 0-255
 // часу (наприклад, мережа впала чи процес завис).
 constexpr unsigned long SOIL_HEATER_MAX_RUNTIME_MS = 900000;
 
+// ---- Підігрів повітря (12V PTC-нагрівач через MOSFET-модуль, ШІМ) ----
+// GPIO42: JTAG MTMS за замовчуванням, але як звичайний GPIO працює — та сама
+// група пінів, що FAN_PIN=40 (MTDO) і SOIL_HEATER_PIN=39 (MTCK). Піни 33-37
+// зайняті октальною PSRAM модуля N16R8 (SPIIO4-7 + DQS) — туди актуатор чіпляти
+// не можна, буде конфлікт шини PSRAM з буфером кадру камери. Керується як
+// grow-світло / грілка ґрунту: окремий MOSFET-модуль на зовнішньому 12V,
+// ESP32 лише подає ШІМ-сигнал.
+#define AIR_HEATER_PIN 42
+constexpr int AIR_HEATER_PWM_CHANNEL = 6; // канали 0 (камера), 4 (світло), 5 (ґрунт) зайняті
+constexpr int AIR_HEATER_PWM_FREQ_HZ = 1000; // теплова маса велика, 5кГц як у ґрунтового зайві
+constexpr int AIR_HEATER_PWM_RESOLUTION_BITS = 8; // потужність 0-255
+
+// Той самий захисний ліміт, що у ґрунтового нагрівача (SOIL_HEATER_MAX_RUNTIME_MS):
+// пожежонебезпечне навантаження без власного термостата, тож таймер оновлюється
+// на КОЖНУ команду "увімкнено" і примусово гасить нагрівач, якщо бекенд не
+// підтвердив рішення довше цього часу.
+constexpr unsigned long AIR_HEATER_MAX_RUNTIME_MS = 900000;
+
 // ---- Актуатори ----
 constexpr int PUMP_RELAY_PIN = 47;
 // GPIO40: перенесено з GPIO21 (той відданий під OneWire-датчик ґрунту, якому

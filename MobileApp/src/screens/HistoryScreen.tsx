@@ -11,7 +11,7 @@ function DecisionRow({ item }: { item: AiDecisionRecord }) {
       <Text style={styles.timestamp}>{new Date(item.timestamp).toLocaleString('uk-UA')}</Text>
       <Text style={styles.state}>
         Насос: {item.pumpOn ? 'Увімк' : 'Вимк'} · Вентилятор: {item.fanOn ? 'Увімк' : 'Вимк'} · Світло:{' '}
-        {item.lightBrightness} · Нагрівач: {item.soilHeaterPower}
+        {item.lightBrightness} · Нагрівач ґрунту: {item.soilHeaterPower} · Нагрівач повітря: {item.airHeaterPower}
       </Text>
       <Text style={styles.reason}>{item.reason}</Text>
       {item.photoDescription ? <Text style={styles.photoDescription}>{item.photoDescription}</Text> : null}

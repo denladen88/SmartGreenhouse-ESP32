@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useApiClient } from '../api/hooks';
 import { Sparkline } from '../components/Sparkline';
-import type { PlantProfile, TelemetryRecord } from '../types';
+import type { AiDecisionRecord, PlantProfile, TelemetryRecord } from '../types';
 
 interface MetricCardProps {
   label: string;
@@ -56,9 +56,21 @@ export function DashboardPage() {
     refetchInterval: 60 * 1000,
   });
 
+  // Останнє рішення локального контролера — показуємо поточний стан актуаторів
+  // просто на дашборді. Той самий queryKey ['decisions','latest'], що патчить
+  // useLiveUpdates на кожен 'DecisionReceived' (api/signalr.ts), тож живі
+  // оновлення працюють без окремого підключення; refetchInterval — фолбек на
+  // випадок офлайн-хаба, як і в решти запитів тут.
+  const decisionQuery = useQuery({
+    queryKey: ['decisions', 'latest'],
+    queryFn: () => api.get<AiDecisionRecord[]>('/api/decisions/history?count=1').then((r) => r?.[0] ?? null),
+    refetchInterval: 60 * 1000,
+  });
+
   const latest = latestQuery.data ?? null;
   const history = historyQuery.data ?? [];
   const profile = profileQuery.data ?? null;
+  const decision = decisionQuery.data ?? null;
 
   const isError = latestQuery.isError || historyQuery.isError || profileQuery.isError;
   if (isError && !latest) {
@@ -72,6 +84,7 @@ export function DashboardPage() {
             latestQuery.refetch();
             historyQuery.refetch();
             profileQuery.refetch();
+            decisionQuery.refetch();
           }}
         >
           Спробувати ще раз
@@ -134,6 +147,20 @@ export function DashboardPage() {
           history={extractSeries(history, (t) => t.pressureHpa)}
         />
       </div>
+
+      {decision && (
+        <div className="profile-box">
+          <div className="profile-title">Актуатори</div>
+          <div className="profile-line">
+            Насос: {decision.pumpOn ? 'Увімк' : 'Вимк'} · Вентилятор: {decision.fanOn ? 'Увімк' : 'Вимк'} · Світло:{' '}
+            {decision.lightBrightness}
+          </div>
+          <div className="profile-line">
+            Нагрівач ґрунту: {decision.soilHeaterPower} · Нагрівач повітря: {decision.airHeaterPower}
+          </div>
+          <div className="profile-notes">{decision.reason}</div>
+        </div>
+      )}
 
       {profile && (
         <div className="profile-box">

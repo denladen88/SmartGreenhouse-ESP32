@@ -62,6 +62,7 @@ void setup() {
     actuators.setFan(cmd.fanOn);
     actuators.setLight(cmd.lightBrightness);
     actuators.setSoilHeater(cmd.soilHeaterPower);
+    actuators.setAirHeater(cmd.airHeaterPower);
   });
   mqtt.begin();
 

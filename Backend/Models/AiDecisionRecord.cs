@@ -13,6 +13,7 @@ public class AiDecisionRecord
     public bool FanOn { get; set; }
     public int LightBrightness { get; set; }
     public int SoilHeaterPower { get; set; }
+    public int AirHeaterPower { get; set; }
     public string Reason { get; set; } = string.Empty;
     public string PhotoDescription { get; set; } = string.Empty;
     public string? PhotoFileName { get; set; }

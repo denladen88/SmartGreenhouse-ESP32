@@ -43,6 +43,7 @@ public class CommandsController : ControllerBase
             FanOn = command.FanOn,
             LightBrightness = command.LightBrightness,
             SoilHeaterPower = command.SoilHeaterPower,
+            AirHeaterPower = command.AirHeaterPower,
             Reason = "Manual override via mobile app",
             PhotoDescription = string.Empty,
             PhotoFileName = null

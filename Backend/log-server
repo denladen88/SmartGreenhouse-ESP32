@@ -1,0 +1,2 @@
+docker compose -p smartgreenhouse logs -f --tail 50 backend
+docker compose -p smartgreenhouse ps        # запущений? uptime, health, порти

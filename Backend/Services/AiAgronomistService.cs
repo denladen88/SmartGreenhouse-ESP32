@@ -221,12 +221,14 @@ public class AiAgronomistService : BackgroundService
     // від локального контролера чи від будь-чого іншого) — щоб примусове
     // вмикання світла для нічного фото не зачепило pump/fan і щоб потім було
     // куди повертати світло назад.
-    private async Task<(bool PumpOn, bool FanOn, int LightBrightness, int SoilHeaterPower)> GetLatestActuatorStateAsync(CancellationToken stoppingToken)
+    private async Task<(bool PumpOn, bool FanOn, int LightBrightness, int SoilHeaterPower, int AirHeaterPower)> GetLatestActuatorStateAsync(CancellationToken stoppingToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var latest = await db.AiDecisions.OrderByDescending(d => d.Timestamp).FirstOrDefaultAsync(stoppingToken);
-        return latest is null ? (false, false, 0, 0) : (latest.PumpOn, latest.FanOn, latest.LightBrightness, latest.SoilHeaterPower);
+        return latest is null
+            ? (false, false, 0, 0, 0)
+            : (latest.PumpOn, latest.FanOn, latest.LightBrightness, latest.SoilHeaterPower, latest.AirHeaterPower);
     }
 
     // Одна повна спроба отримати кадр з ESP32-CAM. Повертає null, якщо камера
@@ -258,7 +260,8 @@ public class AiAgronomistService : BackgroundService
 
             _logger.LogInformation("No photo (likely night per ESP32) — forcing grow light on for a proper shot and retrying");
             await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
-                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, 255, previousDecision.SoilHeaterPower)));
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, 255, previousDecision.SoilHeaterPower,
+                    previousDecision.AirHeaterPower)));
 
             await Task.Delay(TimeSpan.FromSeconds(65), stoppingToken);
 
@@ -274,7 +277,7 @@ public class AiAgronomistService : BackgroundService
 
             await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
                 new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.LightBrightness,
-                    previousDecision.SoilHeaterPower)));
+                    previousDecision.SoilHeaterPower, previousDecision.AirHeaterPower)));
         }
 
         if (imageBytes.Length == 0)
@@ -430,15 +433,22 @@ public class AiAgronomistService : BackgroundService
             "range from the trend shape and actuator history above, not just a snapshot), the minimum AND maximum soil " +
             "temperature (root-zone, not air) it should be kept between, and how many hours of effective light (sun and/or " +
             "grow light combined) it needs per day. These ranges will be used directly by simple automated rules — not by " +
-            "you — to control the pump, fan, grow light, and a soil heating mat until your next review: the fan turns on " +
-            "when air temperature is sustained above TempMaxC OR air humidity is sustained above HumidityMaxPct (so " +
-            "HumidityMaxPct directly controls ventilation, not just an alert threshold); the soil heater runs in two modes " +
-            "— proportional to the deficit whenever soil temperature is below SoilTempMinC, AND (separately) power-modulated " +
-            "whenever soil moisture is sustained above SoilMoistureMaxPct, applying bottom heat to dry an over-wet root " +
-            "zone and stave off root rot, easing off as moisture falls back to SoilMoistureMaxPct and as soil temperature " +
-            "rises toward SoilTempMaxC, with a hard cut at SoilTempMaxC. So SoilTempMaxC is a live control setpoint (keep " +
-            "it a few C above SoilTempMinC with real headroom, never at or below it) and SoilMoistureMaxPct now drives an " +
-            "actuator, not just an alert. Make all ranges realistic operating targets, not aspirational extremes. Also " +
+            "you — to control the pump, fan, grow light, an air heater, and a soil heating mat until your next review. " +
+            "The fan is cooling only: it turns on when air temperature is sustained above TempMaxC. The air heater runs " +
+            "in two modes, both proportional (no on/off jumps): temperature make-up whenever air temperature is sustained " +
+            "below TempMinC (power ramps up with the deficit), AND (separately) dehumidification whenever air humidity is " +
+            "sustained above HumidityMaxPct — warming the air drives relative humidity down and keeps condensation off " +
+            "the leaves, with power modulated by how far humidity is over HumidityMaxPct and tapering to zero as air " +
+            "temperature approaches TempMaxC, plus a hard cut at TempMaxC. So TempMinC AND HumidityMaxPct both directly " +
+            "drive the air heater (HumidityMaxPct is a live control setpoint now, not just an alert threshold), and " +
+            "TempMaxC is a live ceiling for it — keep TempMaxC a few C above TempMinC with real headroom. The soil " +
+            "heater runs in two modes — proportional to the deficit whenever soil temperature is below SoilTempMinC, AND " +
+            "(separately) power-modulated whenever soil moisture is sustained above SoilMoistureMaxPct, applying bottom " +
+            "heat to dry an over-wet root zone and stave off root rot, easing off as moisture falls back to " +
+            "SoilMoistureMaxPct and as soil temperature rises toward SoilTempMaxC, with a hard cut at SoilTempMaxC. So " +
+            "SoilTempMaxC is a live control setpoint (keep it a few C above SoilTempMinC with real headroom, never at or " +
+            "below it) and SoilMoistureMaxPct now drives an actuator, not just an alert. Make all ranges realistic " +
+            "operating targets, not aspirational extremes. Also " +
             "assess the plant's current phenological growth stage from the photo, the days since planting, and the trend " +
             "(e.g. seedling, vegetative, flowering, fruiting, senescing) and take it into account when choosing the ranges. " +
             "Reply strictly in JSON matching this schema: { \"TempMinC\": number, \"TempMaxC\": number, " +
@@ -543,7 +553,8 @@ public class AiAgronomistService : BackgroundService
         {
             var last = segments.Count > 0 ? segments[^1] : null;
             if (last is not null && last.Sample.PumpOn == d.PumpOn && last.Sample.FanOn == d.FanOn &&
-                last.Sample.LightBrightness == d.LightBrightness && last.Sample.SoilHeaterPower == d.SoilHeaterPower)
+                last.Sample.LightBrightness == d.LightBrightness && last.Sample.SoilHeaterPower == d.SoilHeaterPower &&
+                last.Sample.AirHeaterPower == d.AirHeaterPower)
             {
                 segments[^1] = last with { End = d.Timestamp, Count = last.Count + 1 };
             }
@@ -556,7 +567,7 @@ public class AiAgronomistService : BackgroundService
         return string.Join("\n", segments.TakeLast(_agronomistOptions.DecisionHistoryCount).Select(s =>
             $"{s.Start:MM-dd HH:mm}-{s.End:HH:mm} ({s.Count}x) Pump={(s.Sample.PumpOn ? "On" : "Off")} " +
             $"Fan={(s.Sample.FanOn ? "On" : "Off")} Light={s.Sample.LightBrightness} " +
-            $"SoilHeater={s.Sample.SoilHeaterPower} — {s.Sample.Reason}"));
+            $"SoilHeater={s.Sample.SoilHeaterPower} AirHeater={s.Sample.AirHeaterPower} — {s.Sample.Reason}"));
     }
 
     private record ActuatorSegment(DateTime Start, DateTime End, AiDecisionRecord Sample, int Count);
@@ -653,6 +664,13 @@ public class AiAgronomistService : BackgroundService
             .Select(t => t.TemperatureC!.Value)
             .ToListAsync(stoppingToken);
 
+        var recentHumidity = await db.Telemetries
+            .Where(t => t.HumidityPct != null)
+            .OrderByDescending(t => t.Timestamp)
+            .Take(MinSustainedReadings)
+            .Select(t => t.HumidityPct!.Value)
+            .ToListAsync(stoppingToken);
+
         var todayStartUtc = DateTime.Now.Date.ToUniversalTime();
         var todayLightRecords = await db.Telemetries
             .Where(t => t.Timestamp >= todayStartUtc)
@@ -696,6 +714,17 @@ public class AiAgronomistService : BackgroundService
         var tempSustainedHigh = recentTemps.Count >= MinSustainedReadings &&
             recentTemps.All(t => t > profile.TempMaxC);
         var fanReleaseTempC = profile.TempMaxC - _agronomistOptions.FanHysteresisC;
+
+        // Для повітряного нагрівача (нижче): стійко холодне повітря — усі останні
+        // MinSustainedReadings замірів нижче TempMinC; стійко волога — усі
+        // останні заміри RH вище HumidityMaxPct (і сама межа реально задана
+        // профілем, HumidityMaxPct > 0 — інакше режим осушення вимкнено, як
+        // hasCeiling у ґрунтового нагрівача).
+        var tempSustainedLow = recentTemps.Count >= MinSustainedReadings &&
+            recentTemps.All(t => t < profile.TempMinC);
+        var humiditySustainedHigh = profile.HumidityMaxPct > 0 &&
+            recentHumidity.Count >= MinSustainedReadings &&
+            recentHumidity.All(h => h > profile.HumidityMaxPct);
 
         bool fanOn;
         string fanReason;
@@ -850,7 +879,70 @@ public class AiAgronomistService : BackgroundService
             soilHeaterReason = $"SoilTemp {soilTemp:0.#}C in range, SoilMoisture within {profile.SoilMoistureMaxPct:0.#}% max -> Off";
         }
 
-        var reason = $"{fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}";
+        // Повітряний нагрівач: ДВА режими, обидва пропорційним ШІМ, дзеркалять
+        // грілку ґрунту (RunLocalControlAsync вище):
+        //   1) добір температури — коли повітря стійко нижче TempMinC, потужність
+        //      лінійно 0..255 на дефіциті AirHeaterFullPowerDeficitC;
+        //   2) осушення — коли RH стійко вище HumidityMaxPct, підігрів піднімає
+        //      температуру => падає відносна вологість і конденсат не осідає на
+        //      листі. Потужність = мінімум двох лінійних факторів: наскільки RH
+        //      над ціллю (humidityFactor) і скільки лишилось "запасу" під стелею
+        //      TempMaxC (headroomFactor). Тож нагрів сам стихає і коли повітря
+        //      підсохло до цілі, і коли температура підійшла до стелі; на самій
+        //      TempMaxC — жорсткий обрив.
+        // Стеля TempMaxC завжди виграє. З вентилятором (охолодження) не
+        // конфліктує: той вмикається лише на СТІЙКОМУ перегріві вище TempMaxC, а
+        // осушення тут згасає ще на підході до неї (headroomFactor -> 0).
+        int airHeaterPower;
+        string airHeaterReason;
+        if (latestTemp is not { } airTemp)
+        {
+            airHeaterPower = 0;
+            airHeaterReason = "No air temperature readings -> Off";
+        }
+        else if (airTemp >= profile.TempMaxC)
+        {
+            airHeaterPower = 0;
+            airHeaterReason = $"AirTemp {airTemp:0.#}C >= max {profile.TempMaxC:0.#}C -> Off (ceiling)";
+        }
+        else if (tempSustainedLow)
+        {
+            var deficit = profile.TempMinC - airTemp;
+            airHeaterPower = (int)Math.Round(Math.Clamp(deficit / _agronomistOptions.AirHeaterFullPowerDeficitC, 0, 1) * 255);
+            airHeaterReason = $"AirTemp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C < min " +
+                $"{profile.TempMinC:0.#}C (deficit {deficit:0.#}C) -> {airHeaterPower}";
+        }
+        else if (humiditySustainedHigh)
+        {
+            var latestHumidity = recentHumidity[0];
+            var humidityFactor = Math.Clamp(
+                (latestHumidity - profile.HumidityMaxPct) / _agronomistOptions.AirHeaterDryingFullPowerExcessPct, 0, 1);
+            var headroomFactor = Math.Clamp(
+                (profile.TempMaxC - airTemp) / _agronomistOptions.AirHeaterDryingCeilingTaperC, 0, 1);
+            airHeaterPower = (int)Math.Round(Math.Min(humidityFactor, headroomFactor) * 255);
+            airHeaterReason = airHeaterPower > 0
+                ? $"Humidity {latestHumidity:0.#}% > max {profile.HumidityMaxPct:0.#}% " +
+                  $"(excess {latestHumidity - profile.HumidityMaxPct:0.#}%), AirTemp {airTemp:0.#}/{profile.TempMaxC:0.#}C " +
+                  $"-> drying at {airHeaterPower}"
+                : $"Humidity {latestHumidity:0.#}% > max {profile.HumidityMaxPct:0.#}% but AirTemp {airTemp:0.#}C " +
+                  $"near max {profile.TempMaxC:0.#}C, easing off -> Off";
+        }
+        else
+        {
+            airHeaterPower = 0;
+            airHeaterReason = $"AirTemp {airTemp:0.#}C in range, Humidity within {profile.HumidityMaxPct:0.#}% max -> Off";
+        }
+
+        // Тимчасова апаратна стеля: хоч би що вирішили правила вище, не пускаємо
+        // повітряний нагрівач вище AirHeaterMaxPower (перевірка нагрівача/БЖ на
+        // тривалий повний режим).
+        if (airHeaterPower > _agronomistOptions.AirHeaterMaxPower)
+        {
+            airHeaterReason += $" [capped -> {_agronomistOptions.AirHeaterMaxPower}]";
+            airHeaterPower = _agronomistOptions.AirHeaterMaxPower;
+        }
+
+        var reason = $"{fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}; {airHeaterReason}";
 
         var decisionRecord = new AiDecisionRecord
         {
@@ -858,6 +950,7 @@ public class AiAgronomistService : BackgroundService
             FanOn = fanOn,
             LightBrightness = lightBrightness,
             SoilHeaterPower = soilHeaterPower,
+            AirHeaterPower = airHeaterPower,
             Reason = reason,
             PhotoDescription = string.Empty,
             PhotoFileName = null
@@ -869,11 +962,13 @@ public class AiAgronomistService : BackgroundService
         // Публікуємо щотіку незалежно від того, чи змінилось рішення — саме на
         // це покладаються FAN_MAX_RUNTIME_MS/помпові/нагрівача failsafe-таймери на
         // ESP32, які без повторної команди самі гасять актуатор.
-        var commandPayload = JsonSerializer.Serialize(new AiCommand(pumpOn, fanOn, lightBrightness, soilHeaterPower));
+        var commandPayload = JsonSerializer.Serialize(
+            new AiCommand(pumpOn, fanOn, lightBrightness, soilHeaterPower, airHeaterPower));
         await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, commandPayload);
 
-        _logger.LogInformation("Local control decision: Pump={Pump} Fan={Fan} Light={Light} SoilHeater={SoilHeater} — {Reason}",
-            pumpOn ? "On" : "Off", fanOn ? "On" : "Off", lightBrightness, soilHeaterPower, reason);
+        _logger.LogInformation(
+            "Local control decision: Pump={Pump} Fan={Fan} Light={Light} SoilHeater={SoilHeater} AirHeater={AirHeater} — {Reason}",
+            pumpOn ? "On" : "Off", fanOn ? "On" : "Off", lightBrightness, soilHeaterPower, airHeaterPower, reason);
     }
 
     // ---- Спільне ----
