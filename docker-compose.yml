@@ -1,3 +1,4 @@
+name: smartgreenhouse
 services:
   backend:
     image: ghcr.io/denladen88/smartgreenhouse-backend:latest

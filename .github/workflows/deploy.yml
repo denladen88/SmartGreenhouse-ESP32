@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:        # кнопка "Run workflow" в UI, для ручного запуску
 
+concurrency:
+  group: deploy
+  cancel-in-progress: false  # два push'і поспіль не деплоять одночасно — другий чекає
+
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/smartgreenhouse-backend
 
@@ -49,3 +53,42 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # --- Job 3: деплой на self-hosted runner (домашній сервер lenovo-srv) ---
+  deploy:
+    runs-on: [self-hosted, smartgreenhouse]       # піде на runner з міткою smartgreenhouse
+    needs: docker                                 # тільки після успішного push образу
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: read                             # право тягнути приватний образ із GHCR
+    steps:
+      - uses: actions/checkout@v4                 # потрібен docker-compose.yml у робочій теці
+
+      - name: Write Backend/.env from secrets
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          printf 'Gemini__ApiKey=%s\n' "$GEMINI_API_KEY" > Backend/.env
+          chmod 600 Backend/.env
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Pull new image and restart
+        run: |
+          docker compose pull backend
+          docker compose up -d backend
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:8080/ >/dev/null; then echo "healthy"; exit 0; fi
+            echo "waiting for backend... ($i/20)"; sleep 3
+          done
+          echo "backend did not come up"
+          docker compose logs --tail=80 backend
+          exit 1
+
+      - name: Prune dangling images
+        run: docker image prune -f
