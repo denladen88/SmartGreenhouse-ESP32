@@ -1,35 +1,12 @@
-# Deploying Backend to a home server
+# Deploying Backend
 
-Run these steps on the server itself (Linux), not on the dev machine.
+**Deployment is now automated via CI/CD.** The full guide moved to the repo root:
+[`../DEPLOY.md`](../DEPLOY.md).
 
-1. Install Docker and the Docker Compose plugin.
-2. Clone the repository:
-   ```
-   git clone <repo-url>
-   cd SmartGreenhouse
-   ```
-3. Create `Backend/.env` manually (it's gitignored — never comes from git):
-   ```
-   Gemini__ApiKey=your-real-key-here
-   ```
-4. Start it:
-   ```
-   docker compose up -d --build
-   ```
-5. Check logs:
-   ```
-   docker compose logs -f backend
-   ```
+Short version: `git push` to `main` → GitHub Actions builds the image and pushes it
+to GHCR → a self-hosted runner on the home server (`lenovo-srv`) pulls it and runs
+`docker compose up -d`. Data lives in the Docker named volume
+`smartgreenhouse_greenhouse_data` (no longer in `Backend/appdata/`).
 
-## Updating later
-
-```
-git pull
-docker compose up -d --build
-```
-
-`greenhouse.db` and `Photos/` live in `Backend/appdata/` on the host (mounted into the container), so they survive rebuilds and restarts.
-
-## If the container can't reach the MQTT broker or ESP32-CAM
-
-Edit `docker-compose.yml` and uncomment `network_mode: host`, then `docker compose up -d --build` again.
+For local dev, one-time setup, rollback, and troubleshooting see
+[`../DEPLOY.md`](../DEPLOY.md).

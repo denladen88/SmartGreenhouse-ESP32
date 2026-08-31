@@ -6,6 +6,11 @@ services:
       context: .
       dockerfile: Backend/Dockerfile
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"     # один файл логу не більше 10 МБ
+        max-file: "3"        # тримати максимум 3 файли (ротація) → стеля ~30 МБ
     env_file:
       - path: ./Backend/.env
         required: false
