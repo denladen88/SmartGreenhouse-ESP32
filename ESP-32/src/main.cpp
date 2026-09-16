@@ -154,29 +154,30 @@ void setup() {
 
 void loop() {
   // Детектор зависання: якщо якийсь виклик нижче (найімовірніше — блокуючий
-  // MQTT-reconnect до недоступного брокера) з'їв понад ~3 с, failsafe-таймери
-  // помпи в actuators.update() цей час не працювали. Аварійно гасимо помпу
-  // негайно — бекенд перекомандує наступним тіком. Ловить будь-яку причину
-  // блокування loop(), не лише MQTT. Перша ітерація пропускається (lastLoopMs
-  // ще 0 після довгого setup()).
+  // MQTT-reconnect до недоступного брокера) з'їв понад ~3 с, ЖОДЕН
+  // failsafe-таймер в actuators.update() цей час не працював — не лише
+  // помпин. Аварійно гасимо ВСІ актуатори негайно (emergencyStopAll), а не
+  // тільки помпу: fan/light/обидва нагрівачі — той самий millis()-таймер, що
+  // просто не встиг спрацювати вчасно. Бекенд перекомандує актуальний стан
+  // наступним тіком. Ловить будь-яку причину блокування loop(), не лише
+  // MQTT. Перша ітерація пропускається (lastLoopMs ще 0 після довгого setup()).
   static unsigned long lastLoopMs = 0;
   unsigned long nowMs = millis();
   unsigned long loopGap = nowMs - lastLoopMs;
-  if (lastLoopMs != 0 && loopGap > 3000 && actuators.isPumpOn()) {
-    actuators.setPump(false);
-    Serial.printf("[SAFETY] loop() завис на %lu мс — помпу аварійно вимкнено.\n", loopGap);
+  if (lastLoopMs != 0 && loopGap > 3000) {
+    actuators.emergencyStopAll();
+    Serial.printf("[SAFETY] loop() завис на %lu мс — усі актуатори аварійно вимкнено.\n", loopGap);
   }
   lastLoopMs = nowMs;
 
-  network.update();
+  bool wifiUp = network.update();
   sensors.update();  // неблокуюча вибірка ADC ґрунту + переперевіряння сенсорів
-  mqtt.update();
-  actuators.update(); // failsafe-перевірка помпи щоцикл, незалежно від таймерів
+  bool mqttUp = mqtt.update(wifiUp);
+  actuators.update(); // failsafe-перевірка кожного актуатора щоцикл, незалежно від таймерів
 
   // Перша телеметрія одразу після появи MQTT, а не через повний
   // MQTT_PUBLISH_INTERVAL_MS: на фронті "з'явився зв'язок" форсуємо тік таймера.
   static bool wasMqttUp = false;
-  bool mqttUp = mqtt.isConnected();
   if (mqttUp && !wasMqttUp) {
     mqttPublishTimer.expire();
   }
@@ -203,7 +204,7 @@ void loop() {
   }
 
   if (mqttPublishTimer.elapsed()) {
-    if (network.isConnected()) {
+    if (wifiUp) {
       mqtt.publishTelemetry(lastSensorData);
     } else {
       Serial.println("[MQTT] Пропуск публікації: немає Wi-Fi.");

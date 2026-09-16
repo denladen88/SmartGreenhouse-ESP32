@@ -51,6 +51,15 @@ private:
   bool _hasBh1750 = false;
   bool _hasSoilTemp = false;
 
+  // Скільки поспіль неправдоподібних/неуспішних читань підряд, перш ніж
+  // вважати сенсор відпалим від шини й скинути has*-прапорець (щоб
+  // update()'s 5-хв reprobe його підхопив) — один випадковий шумний I2C-кадр
+  // не повинен видавати справний сенсор за відсутній.
+  static constexpr uint8_t kMaxConsecutiveFailures = 3;
+  uint8_t _bmeFailCount = 0;
+  uint8_t _bh1750FailCount = 0;
+  uint8_t _soilTempFailCount = 0;
+
   bool _soilTempPending = false; // чи очікує getTempCByIndex() замовлення з минулого read()
 
   int _soilRing[kSoilSamples] = {0};

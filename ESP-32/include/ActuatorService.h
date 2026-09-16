@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 
 // Керує помпою (реле), вентилятором циркуляції (реле), витяжкою (реле,
 // незалежна), grow-світлом (один діод через LED-драйвер струму, ШІМ-сигнал
@@ -24,9 +25,16 @@ public:
   void setPump(bool on);
   void setFan(bool on);               // явний запит на вентиляцію; фактичний пін — див. isFanOn()
   void setExhaustFan(bool on);        // витяжка; незалежна від setFan()/setAirHeater()
-  void setLight(uint8_t brightness); // 0 = вимкнено; обрізається до LIGHT_MAX_BRIGHTNESS (800 мА), а не 255
+  void setLight(uint8_t brightness); // 0 = вимкнено; обрізається до LIGHT_MAX_BRIGHTNESS (25% ШІМ), а не 255
   void setSoilHeater(uint8_t power);  // 0 = вимкнено; обрізається до SOIL_HEATER_MAX_POWER
   void setAirHeater(uint8_t power);   // 0 = вимкнено; обрізається до AIR_HEATER_MAX_POWER; ненульова потужність тримає вентилятор увімкненим
+
+  // Аварійне вимкнення ВСЬОГО одразу, незалежно від власних failsafe-таймерів
+  // кожного актуатора — для випадків, коли loop() сам щойно завис на секунди
+  // (детектор зависання в main.cpp) і немає гарантії, коли наступний штатний
+  // update() встигне перевірити кожен таймер окремо. Бекенд перекомандує
+  // актуальний стан наступним тіком.
+  void emergencyStopAll();
 
   bool isPumpOn() const { return _pumpOn; }
   bool isFanOn() const { return _fanRequested || _airHeaterPower > 0; } // фактичний стан FAN_PIN, не лише останній setFan()
@@ -37,6 +45,20 @@ public:
 
 private:
   void applyFanOutput(); // пише FAN_PIN = isFanOn(); викликати після зміни _fanRequested або _airHeaterPower
+
+  // Спільна форма для 6 практично ідентичних перевірок у update() (лише поле
+  // active, таймер startMs, ліміт maxRuntimeMs, лейбл логу й "вимикач"
+  // різняться) — щоб додавання нового актуатора не означало копіювати ще один
+  // 5-рядковий блок і ризикувати одруком у назві таймера/константи.
+  void checkFailsafe(bool active, unsigned long startMs, unsigned long maxRuntimeMs,
+                      const char* label, const std::function<void()>& off);
+
+  // Спільна форма для setLight/setSoilHeater/setAirHeater: обрізати до
+  // апаратної стелі, освіжити failsafe-таймер на ненульовому запиті, записати
+  // ШІМ. stateField/startMs — посилання на конкретне приватне поле
+  // (_lightBrightness/_lightStartMs тощо) цього актуатора.
+  void applyClampedPwm(uint8_t requested, uint8_t maxValue, int pwmChannel,
+                        unsigned long& startMs, uint8_t& stateField, const char* label);
 
   bool _pumpOn = false;
   bool _fanRequested = false; // останній явний setFan(); НЕ обов'язково фактичний стан піна — див. isFanOn()

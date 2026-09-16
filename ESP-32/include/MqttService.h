@@ -32,7 +32,11 @@ public:
   MqttService();
 
   void begin();
-  void update(); // викликати кожен цикл loop()
+  // Викликати кожен цикл loop(); wifiUp — результат network.update() ЦЬОГО Ж
+  // проходу циклу, щоб не питати WiFi.status() вдруге за той самий стан.
+  // Повертає isConnected() одразу після оновлення (той самий стан, що й
+  // isConnected(), але без другого виклику _mqttClient.connected() у loop()).
+  bool update(bool wifiUp);
 
   bool isConnected();
   void publishTelemetry(const SensorData& data);

@@ -23,12 +23,14 @@ bool SensorService::begin() {
 
 void SensorService::initBme() {
   _hasBme = _bme.begin(BME280_ADDR_PRIMARY, &Wire) || _bme.begin(BME280_ADDR_SECONDARY, &Wire);
+  _bmeFailCount = 0;
   Serial.println(_hasBme ? "[BME280] Клімат-сенсор готовий."
                          : "[BME280] Помилка: BME280 не знайдено!");
 }
 
 void SensorService::initBh1750() {
   _hasBh1750 = _lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, BH1750_ADDR, &Wire);
+  _bh1750FailCount = 0;
   Serial.println(_hasBh1750 ? "[BH1750] Люксметр готовий."
                             : "[BH1750] Помилка: BH1750 не знайдено!");
 }
@@ -47,6 +49,7 @@ void SensorService::initSoilTemp() {
   _dallasTemp.setWaitForConversion(false);
   _soilTempPending = false;
   _hasSoilTemp = _dallasTemp.getDeviceCount() > 0;
+  _soilTempFailCount = 0;
   Serial.println(_hasSoilTemp ? "[DS18B20] Ґрунтовий термодатчик готовий."
                               : "[DS18B20] Помилка: датчик не знайдено на OneWire-шині!");
 }
@@ -94,9 +97,18 @@ SensorData SensorService::read() {
       data.temperatureC = temp;
       data.humidityPct = hum;
       data.pressureHpa = pres;
+      _bmeFailCount = 0;
     } else {
       Serial.printf("[BME280] Відкинуто неправдоподібний вимір (%.2f°C, %.2f%%, %.2fhPa) — ймовірно, збій I2C.\n",
                     temp, hum, pres);
+      // N поспіль неправдоподібних вимірів — це вже не шум, а сенсор, що
+      // відпав від шини (розхитаний конектор, просадка живлення). Скидаємо
+      // has-прапорець, щоб update()'s reprobe (кожні 5 хв) підхопив його
+      // повернення — інакше читання лишались би "мертвими" до перезавантаження.
+      if (++_bmeFailCount >= kMaxConsecutiveFailures) {
+        _hasBme = false;
+        Serial.println("[BME280] Забагато поспіль неправдоподібних вимірів — вважаємо відключеним, чекаємо reprobe.");
+      }
     }
   }
 
@@ -107,8 +119,13 @@ SensorData SensorService::read() {
     if (lux >= 0.0f && lux < 54612.0f) {
       data.lightValid = true;
       data.lux = lux;
+      _bh1750FailCount = 0;
     } else {
       Serial.printf("[BH1750] Відкинуто неправдоподібний вимір (%.1f lx) — ймовірно, збій I2C.\n", lux);
+      if (++_bh1750FailCount >= kMaxConsecutiveFailures) {
+        _hasBh1750 = false;
+        Serial.println("[BH1750] Забагато поспіль неправдоподібних вимірів — вважаємо відключеним, чекаємо reprobe.");
+      }
     }
   }
 
@@ -159,8 +176,13 @@ SensorData SensorService::read() {
       if (t != DEVICE_DISCONNECTED_C) {
         data.soilTempValid = true;
         data.soilTempC = t;
+        _soilTempFailCount = 0;
       } else {
         Serial.println("[DS18B20] Датчик не відповів під час читання.");
+        if (++_soilTempFailCount >= kMaxConsecutiveFailures) {
+          _hasSoilTemp = false;
+          Serial.println("[DS18B20] Забагато поспіль невдалих читань — вважаємо відключеним, чекаємо reprobe.");
+        }
       }
     }
     _dallasTemp.requestTemperatures(); // миттєво (setWaitForConversion(false))

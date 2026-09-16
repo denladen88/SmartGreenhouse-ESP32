@@ -8,7 +8,7 @@ public:
   NetworkService();
 
   void begin();
-  void update(); // викликати кожен цикл loop()
+  bool update(); // викликати кожен цикл loop(); повертає isConnected() одразу після оновлення
   bool isConnected() const;
 
 private:

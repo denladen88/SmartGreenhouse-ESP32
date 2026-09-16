@@ -22,7 +22,7 @@ void NetworkService::connect() {
   WiFi.setSleep(false);
 }
 
-void NetworkService::update() {
+bool NetworkService::update() {
   bool connected = isConnected();
   // Backend звертається до /capture за жорстко заданою IP (Esp32:CameraUrl
   // у appsettings.json), а не по mDNS-імені — тож при заміні плати чи зміні
@@ -37,6 +37,12 @@ void NetworkService::update() {
     Serial.println("[WiFi] З'єднання відсутнє, повторна спроба...");
     connect();
   }
+
+  // Повертаємо стан, який щойно обчислили вище (WiFi.status() всередині
+  // isConnected() — не найдешевший виклик): loop() бере це значення один раз
+  // і передає далі (mqtt.update(), гейт публікації), замість того щоб кожен
+  // споживач у тому самому проході циклу питав WiFi-драйвер про те саме.
+  return connected;
 }
 
 bool NetworkService::isConnected() const {

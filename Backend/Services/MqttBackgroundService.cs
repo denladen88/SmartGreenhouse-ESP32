@@ -143,6 +143,7 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
                 Lux = telemetry.Lux,
                 SoilRaw = telemetry.SoilRaw,
                 SoilMoisturePct = telemetry.SoilMoisturePct,
+                SoilValid = telemetry.SoilValid ?? true,
                 SoilTempC = telemetry.SoilTempC
             };
             db.Telemetries.Add(record);

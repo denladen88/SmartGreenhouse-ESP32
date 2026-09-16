@@ -36,21 +36,22 @@ public class PlantProfileController : ControllerBase
         }
 
         // Той самий захист "здорового глузду", що й для AI-профілю
-        // (AiAgronomistService) — не лише min<max, а й фізично розумні межі, бо ці
-        // поля напряму рухають потужність нагрівачів у RunLocalControlAsync.
-        // Обрізаємо ДО перевірки min<max — інакше пара (50, 60), обидва поза
-        // межею, пройшла б перевірку порядку, а після обрізання стала б (45, 45).
-        const double MinPlausibleTempC = 0.0;
-        const double MaxPlausibleTempC = 45.0;
-
-        var tempMinC = Math.Clamp(updated.TempMinC, MinPlausibleTempC, MaxPlausibleTempC);
-        var tempMaxC = Math.Clamp(updated.TempMaxC, MinPlausibleTempC, MaxPlausibleTempC);
-        var humidityMinPct = Math.Clamp(updated.HumidityMinPct, 0, 100);
-        var humidityMaxPct = Math.Clamp(updated.HumidityMaxPct, 0, 100);
-        var soilMoistureMinPct = Math.Clamp(updated.SoilMoistureMinPct, 0, 100);
-        var soilMoistureMaxPct = Math.Clamp(updated.SoilMoistureMaxPct, 0, 100);
-        var soilTempMinC = Math.Clamp(updated.SoilTempMinC, MinPlausibleTempC, MaxPlausibleTempC);
-        var soilTempMaxC = Math.Clamp(updated.SoilTempMaxC, MinPlausibleTempC, MaxPlausibleTempC);
+        // (AiAgronomistService), тепер спільний через PlantProfileRangeGuard — не
+        // лише min<max, а й фізично розумні межі, бо ці поля напряму рухають
+        // потужність нагрівачів у RunLocalControlAsync. Обрізаємо ДО перевірки
+        // min<max — інакше пара (50, 60), обидва поза межею, пройшла б перевірку
+        // порядку, а після обрізання стала б (45, 45). На відміну від
+        // AiAgronomistService (яка самокоригує невпорядковану пару — відхилити
+        // AI-відповідь нема кому), тут, де є людина на іншому кінці HTTP-запиту,
+        // невпорядкована пара відхиляється нижче через BadRequest.
+        var tempMinC = PlantProfileRangeGuard.ClampTempC(updated.TempMinC);
+        var tempMaxC = PlantProfileRangeGuard.ClampTempC(updated.TempMaxC);
+        var humidityMinPct = PlantProfileRangeGuard.ClampPct(updated.HumidityMinPct);
+        var humidityMaxPct = PlantProfileRangeGuard.ClampPct(updated.HumidityMaxPct);
+        var soilMoistureMinPct = PlantProfileRangeGuard.ClampPct(updated.SoilMoistureMinPct);
+        var soilMoistureMaxPct = PlantProfileRangeGuard.ClampPct(updated.SoilMoistureMaxPct);
+        var soilTempMinC = PlantProfileRangeGuard.ClampTempC(updated.SoilTempMinC);
+        var soilTempMaxC = PlantProfileRangeGuard.ClampTempC(updated.SoilTempMaxC);
 
         // Локальний контролер довіряє цим межам напряму (наприклад, нагрівач
         // ґрунту вмикає просушку лише коли SoilTempMaxC > SoilTempMinC). Клієнти

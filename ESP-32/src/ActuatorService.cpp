@@ -35,48 +35,33 @@ void ActuatorService::update() {
     setPump(false);
   }
 
-  // Аварійне вимкнення: якщо помпа увімкнена довше PUMP_MAX_RUNTIME_MS,
-  // примусово гасимо її незалежно від того, хто й чому її увімкнув.
-  if (_pumpOn && (millis() - _pumpStartMs >= PUMP_MAX_RUNTIME_MS)) {
-    Serial.printf("[ПОМПА] УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
-                  PUMP_MAX_RUNTIME_MS);
-    setPump(false);
-  }
+  // Той самий захист для помпи (аварійне вимкнення понад PUMP_MAX_RUNTIME_MS,
+  // незалежно від того, хто й чому її увімкнув), вентилятора, витяжки, світла й обох
+  // нагрівачів (*_MAX_RUNTIME_MS — див. Config.h), лише через спільний
+  // checkFailsafe() замість шести окремо виписаних копій.
+  checkFailsafe(_pumpOn, _pumpStartMs, PUMP_MAX_RUNTIME_MS, "ПОМПА", [this] { setPump(false); });
+  checkFailsafe(_fanRequested, _fanStartMs, FAN_MAX_RUNTIME_MS, "ВЕНТИЛЯТОР", [this] { setFan(false); });
+  checkFailsafe(_exhaustFanOn, _exhaustFanStartMs, EXHAUST_FAN_MAX_RUNTIME_MS, "ВИТЯЖКА", [this] { setExhaustFan(false); });
+  checkFailsafe(_lightBrightness > 0, _lightStartMs, LIGHT_MAX_RUNTIME_MS, "СВІТЛО", [this] { setLight(0); });
+  checkFailsafe(_soilHeaterPower > 0, _soilHeaterStartMs, SOIL_HEATER_MAX_RUNTIME_MS, "НАГРІВАЧ", [this] { setSoilHeater(0); });
+  checkFailsafe(_airHeaterPower > 0, _airHeaterStartMs, AIR_HEATER_MAX_RUNTIME_MS, "НАГРІВАЧ ПОВІТРЯ", [this] { setAirHeater(0); });
+}
 
-  // Той самий захист для вентилятора (FAN_MAX_RUNTIME_MS) — див. коментар у Config.h.
-  if (_fanRequested && (millis() - _fanStartMs >= FAN_MAX_RUNTIME_MS)) {
-    Serial.printf("[ВЕНТИЛЯТОР] УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
-                  FAN_MAX_RUNTIME_MS);
-    setFan(false);
+void ActuatorService::checkFailsafe(bool active, unsigned long startMs, unsigned long maxRuntimeMs,
+                                     const char* label, const std::function<void()>& off) {
+  if (active && (millis() - startMs >= maxRuntimeMs)) {
+    Serial.printf("[%s] УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n", label, maxRuntimeMs);
+    off();
   }
+}
 
-  // Той самий захист для витяжки (EXHAUST_FAN_MAX_RUNTIME_MS) — див. Config.h.
-  if (_exhaustFanOn && (millis() - _exhaustFanStartMs >= EXHAUST_FAN_MAX_RUNTIME_MS)) {
-    Serial.printf("[ВИТЯЖКА]  УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
-                  EXHAUST_FAN_MAX_RUNTIME_MS);
-    setExhaustFan(false);
-  }
-
-  // Той самий захист для світла (LIGHT_MAX_RUNTIME_MS) — див. Config.h.
-  if (_lightBrightness > 0 && (millis() - _lightStartMs >= LIGHT_MAX_RUNTIME_MS)) {
-    Serial.printf("[СВІТЛО] УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
-                  LIGHT_MAX_RUNTIME_MS);
-    setLight(0);
-  }
-
-  // Той самий захист для ґрунтового нагрівача (SOIL_HEATER_MAX_RUNTIME_MS) — див. Config.h.
-  if (_soilHeaterPower > 0 && (millis() - _soilHeaterStartMs >= SOIL_HEATER_MAX_RUNTIME_MS)) {
-    Serial.printf("[НАГРІВАЧ]  УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
-                  SOIL_HEATER_MAX_RUNTIME_MS);
-    setSoilHeater(0);
-  }
-
-  // Той самий захист для повітряного нагрівача (AIR_HEATER_MAX_RUNTIME_MS) — див. Config.h.
-  if (_airHeaterPower > 0 && (millis() - _airHeaterStartMs >= AIR_HEATER_MAX_RUNTIME_MS)) {
-    Serial.printf("[НАГРІВАЧ ПОВІТРЯ] УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
-                  AIR_HEATER_MAX_RUNTIME_MS);
-    setAirHeater(0);
-  }
+void ActuatorService::emergencyStopAll() {
+  setPump(false);
+  setFan(false);
+  setExhaustFan(false);
+  setLight(0);
+  setSoilHeater(0);
+  setAirHeater(0);
 }
 
 void ActuatorService::setPump(bool on) {
@@ -121,59 +106,37 @@ void ActuatorService::setExhaustFan(bool on) {
 }
 
 void ActuatorService::setLight(uint8_t brightness) {
-  // Апаратний захист діода (див. LIGHT_MAX_BRIGHTNESS у Config.h) — не
-  // довіряємо, що бекенд чи ручний override завжди пришле безпечне значення.
-  if (brightness > LIGHT_MAX_BRIGHTNESS) {
-    Serial.printf("[СВІТЛО] Запит %d обрізано до безпечного максимуму %d.\n",
-                  brightness, LIGHT_MAX_BRIGHTNESS);
-    brightness = LIGHT_MAX_BRIGHTNESS;
+  applyClampedPwm(brightness, LIGHT_MAX_BRIGHTNESS, LED_PWM_CHANNEL, _lightStartMs, _lightBrightness, "СВІТЛО");
+}
+
+void ActuatorService::setSoilHeater(uint8_t power) {
+  applyClampedPwm(power, SOIL_HEATER_MAX_POWER, SOIL_HEATER_PWM_CHANNEL, _soilHeaterStartMs, _soilHeaterPower, "ҐРУНТ. НАГРІВАЧ");
+}
+
+void ActuatorService::setAirHeater(uint8_t power) {
+  applyClampedPwm(power, AIR_HEATER_MAX_POWER, AIR_HEATER_PWM_CHANNEL, _airHeaterStartMs, _airHeaterPower, "ПОВІТР. НАГРІВАЧ");
+  // Обдув без вентилятора не має сенсу — тепло застоюється біля елемента,
+  // датчик його не бачить. Вентилятор і нагрівач — один фізичний блок.
+  applyFanOutput();
+}
+
+void ActuatorService::applyClampedPwm(uint8_t requested, uint8_t maxValue, int pwmChannel,
+                                       unsigned long& startMs, uint8_t& stateField, const char* label) {
+  // Апаратний захист (LIGHT_MAX_BRIGHTNESS/SOIL_HEATER_MAX_POWER/AIR_HEATER_MAX_POWER
+  // у Config.h) — не довіряємо, що бекенд чи ручний override завжди пришле
+  // безпечне значення.
+  if (requested > maxValue) {
+    Serial.printf("[%s] Запит %d обрізано до безпечного максимуму %d.\n", label, requested, maxValue);
+    requested = maxValue;
   }
   // Той самий принцип, що й у вентилятора/витяжки: таймер оновлюється на
   // кожну команду "увімкнено" (не лише перехід off->on), бо очікується
   // безперервна робота з періодичним підтвердженням від бекенда.
-  if (brightness > 0) {
-    _lightStartMs = millis();
+  if (requested > 0) {
+    startMs = millis();
   }
-  _lightBrightness = brightness;
-  ledcWrite(LED_PWM_CHANNEL, brightness);
-}
-
-void ActuatorService::setSoilHeater(uint8_t power) {
-  // Апаратний захист, як у setLight() (LIGHT_MAX_BRIGHTNESS) — не довіряємо,
-  // що бекенд чи ручний override завжди пришле безпечне значення.
-  if (power > SOIL_HEATER_MAX_POWER) {
-    Serial.printf("[ҐРУНТ. НАГРІВАЧ] Запит %d обрізано до безпечного максимуму %d.\n",
-                  power, SOIL_HEATER_MAX_POWER);
-    power = SOIL_HEATER_MAX_POWER;
-  }
-  // Той самий принцип, що й у вентилятора: таймер оновлюється на кожну
-  // команду "увімкнено" (не лише перехід off->on), бо очікується
-  // безперервна робота з періодичним підтвердженням від бекенда.
-  if (power > 0) {
-    _soilHeaterStartMs = millis();
-  }
-  _soilHeaterPower = power;
-  ledcWrite(SOIL_HEATER_PWM_CHANNEL, power);
-}
-
-void ActuatorService::setAirHeater(uint8_t power) {
-  // Апаратний захист, як у setSoilHeater()/setLight().
-  if (power > AIR_HEATER_MAX_POWER) {
-    Serial.printf("[ПОВІТР. НАГРІВАЧ] Запит %d обрізано до безпечного максимуму %d.\n",
-                  power, AIR_HEATER_MAX_POWER);
-    power = AIR_HEATER_MAX_POWER;
-  }
-  // Той самий принцип, що й у ґрунтового нагрівача: таймер оновлюється на
-  // кожну команду "увімкнено" (не лише перехід off->on), бо очікується
-  // безперервна робота з періодичним підтвердженням від бекенда.
-  if (power > 0) {
-    _airHeaterStartMs = millis();
-  }
-  _airHeaterPower = power;
-  ledcWrite(AIR_HEATER_PWM_CHANNEL, power);
-  // Обдув без вентилятора не має сенсу — тепло застоюється біля елемента,
-  // датчик його не бачить. Вентилятор і нагрівач — один фізичний блок.
-  applyFanOutput();
+  stateField = requested;
+  ledcWrite(pwmChannel, requested);
 }
 
 void ActuatorService::applyFanOutput() {

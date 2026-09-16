@@ -1,7 +1,6 @@
 #include "MqttService.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <WiFi.h>
 #include <cstring>
 #include <math.h>
 #include "Config.h"
@@ -24,6 +23,12 @@ void MqttService::begin() {
   // connect() блокуючий і викликається з loop(), тож ця стеля напряму обмежує,
   // наскільки reconnect до недоступного брокера підвішує failsafe-таймери.
   _mqttClient.setSocketTimeout(2);
+  // Те саме обмеження, але для самого TCP-connect (крок ДО CONNACK): якщо
+  // брокер недоступний і мовчки не відповідає (а не одразу відхиляє
+  // з'єднання), сокет-connect усередині WiFiClient може висіти довше за
+  // setSocketTimeout(2) вище — той обмежує лише очікування CONNACK ПІСЛЯ
+  // встановленого з'єднання. setTimeout() тут обмежує сам connect().
+  _wifiClient.setTimeout(2000);
   _mqttClient.setKeepAlive(15);
 }
 
@@ -91,17 +96,19 @@ void MqttService::reconnect() {
   }
 }
 
-void MqttService::update() {
+bool MqttService::update(bool wifiUp) {
   if (!_mqttClient.connected()) {
     // Без Wi-Fi сокет-connect усе одно провалиться, але блокуюче: не чіпаємо
     // брокер, поки мережа не піднялась (публікація в main.cpp так само
-    // захищена network.isConnected()).
-    if (WiFi.status() == WL_CONNECTED && _reconnectTimer.elapsed()) {
+    // захищена тим самим wifiUp). wifiUp приходить від network.update() цього
+    // ж проходу циклу — не питаємо WiFi.status() тут вдруге.
+    if (wifiUp && _reconnectTimer.elapsed()) {
       reconnect();
     }
-    return;
+    return _mqttClient.connected();
   }
   _mqttClient.loop();
+  return true;
 }
 
 bool MqttService::isConnected() {

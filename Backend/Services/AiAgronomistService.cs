@@ -31,6 +31,13 @@ public class AiAgronomistService : BackgroundService
     // бути шумом, кілька поспіль — уже сигнал.
     private const int MinSustainedReadings = 2;
 
+    // Запас (у °C/percentage points), на який піднімається max, якщо AI-профіль
+    // повернув пару, що після незалежного обрізання до PlantProfileRangeGuard
+    // виявилась невпорядкованою (min >= max) — див. RunProfileAnalysisAsync.
+    private const double TempOrderMarginC = 2.0;
+    private const double HumidityOrderMarginPct = 10.0;
+    private const double SoilMoistureOrderMarginPct = 10.0;
+
     private readonly ILogger<AiAgronomistService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly GeminiOptions _geminiOptions;
@@ -488,32 +495,35 @@ public class AiAgronomistService : BackgroundService
 
         // Захист від некоректної/маніпульованої відповіді: навіть у межах min<max
         // екстремальне значення (наприклад, 200C) небезпечне, бо ці пороги напряму
-        // рухають потужність нагрівачів у RunLocalControlAsync. Обрізаємо до
-        // фізично розумного діапазону для домашньої теплиці ДО будь-якого
-        // подальшого використання, а не лише перевіряємо порядок min/max.
-        const double MinPlausibleTempC = 0.0;
-        const double MaxPlausibleTempC = 45.0;
-
-        var tempMinC = Math.Clamp(analysis.TempMinC, MinPlausibleTempC, MaxPlausibleTempC);
-        var tempMaxC = Math.Clamp(analysis.TempMaxC, MinPlausibleTempC, MaxPlausibleTempC);
-        var humidityMinPct = Math.Clamp(analysis.HumidityMinPct, 0, 100);
-        var humidityMaxPct = Math.Clamp(analysis.HumidityMaxPct, 0, 100);
-        var soilMoistureMinPct = Math.Clamp(analysis.SoilMoistureMinPct, 0, 100);
-        var soilMoistureMaxPct = Math.Clamp(analysis.SoilMoistureMaxPct, 0, 100);
-        var soilTempMinC = Math.Clamp(analysis.SoilTempMinC, MinPlausibleTempC, MaxPlausibleTempC);
+        // рухають потужність нагрівачів у RunLocalControlAsync. PlantProfileRangeGuard
+        // обрізає кожен кінець пари НЕЗАЛЕЖНО до фізично розумного діапазону, а
+        // потім перевіряє min < max ЗА ВЖЕ ОБРІЗАНИМИ значеннями (не сире проти
+        // обрізаного — саме ця розбіжність раніше ховала баг: пара (46, 47),
+        // обидві вище стелі 45°C, обрізалась в (45, 45), а порівняння "сире 47 >
+        // обрізане 45" пропускало це як впорядковану пару). Той самий guard
+        // використовує ручне редагування в PlantProfileController — там
+        // невпорядкована пара відхиляється (BadRequest), тут, де відхилити
+        // нема кому, вона самокоригується підняттям max на запас.
+        var (tempMinC, tempMaxC, tempReordered) =
+            PlantProfileRangeGuard.ClampOrderedTempC(analysis.TempMinC, analysis.TempMaxC, TempOrderMarginC);
+        var (humidityMinPct, humidityMaxPct, humidityReordered) =
+            PlantProfileRangeGuard.ClampOrderedPct(analysis.HumidityMinPct, analysis.HumidityMaxPct, HumidityOrderMarginPct);
+        var (soilMoistureMinPct, soilMoistureMaxPct, soilMoistureReordered) =
+            PlantProfileRangeGuard.ClampOrderedPct(analysis.SoilMoistureMinPct, analysis.SoilMoistureMaxPct, SoilMoistureOrderMarginPct);
+        var (soilTempMinC, soilTempMaxC, soilTempReordered) = PlantProfileRangeGuard.ClampOrderedTempC(
+            analysis.SoilTempMinC, analysis.SoilTempMaxC, _agronomistOptions.SoilHeaterFullPowerDeficitC);
         var dailyLightHoursTarget = Math.Clamp(analysis.DailyLightHoursTarget, 0, 24);
 
-        // Якщо AI повернув SoilTempMaxC <= SoilTempMinC, це або вимкнуло б добір
-        // температури, або зняло стелю просушки — обидва небезпечні. Підставляємо
-        // мінімум + запас на повну потужність.
-        var soilTempMaxC = analysis.SoilTempMaxC > soilTempMinC
-            ? Math.Clamp(analysis.SoilTempMaxC, MinPlausibleTempC, MaxPlausibleTempC)
-            : soilTempMinC + _agronomistOptions.SoilHeaterFullPowerDeficitC;
-        if (soilTempMaxC != analysis.SoilTempMaxC)
+        if (tempReordered || humidityReordered || soilMoistureReordered || soilTempReordered)
         {
             _logger.LogWarning(
-                "AI returned SoilTempMaxC {Returned}C (SoilTempMinC {Min}C) — clamped/adjusted to {Clamped}C",
-                analysis.SoilTempMaxC, analysis.SoilTempMinC, soilTempMaxC);
+                "AI returned an out-of-order/out-of-range min-max pair (Temp={TempReordered}, Humidity={HumidityReordered}, " +
+                "SoilMoisture={SoilMoistureReordered}, SoilTemp={SoilTempReordered}) — reordered with a margin. Raw values: " +
+                "Temp {RawTempMin}-{RawTempMax}C, Humidity {RawHumMin}-{RawHumMax}%, SoilMoisture {RawSoilMin}-{RawSoilMax}%, " +
+                "SoilTemp {RawSoilTempMin}-{RawSoilTempMax}C",
+                tempReordered, humidityReordered, soilMoistureReordered, soilTempReordered,
+                analysis.TempMinC, analysis.TempMaxC, analysis.HumidityMinPct, analysis.HumidityMaxPct,
+                analysis.SoilMoistureMinPct, analysis.SoilMoistureMaxPct, analysis.SoilTempMinC, analysis.SoilTempMaxC);
         }
 
         _logger.LogInformation(
@@ -673,25 +683,29 @@ public class AiAgronomistService : BackgroundService
         }
 
         var soilWindowStart = DateTime.UtcNow - TimeSpan.FromMinutes(_agronomistOptions.SoilMoistureTrendWindowMinutes);
+        // t.SoilValid: прошивка позначає ним показник, який ймовірно від сенсора,
+        // що відвалився/обірваний (див. SensorService::read у ESP-32) — без цього
+        // фільтра garbage-значення потрапляли б у тренд поливу/просушки нарівні з
+        // реальними замірами.
         var soilPoints = await db.Telemetries
-            .Where(t => t.Timestamp >= soilWindowStart && t.SoilMoisturePct != null)
+            .Where(t => t.Timestamp >= soilWindowStart && t.SoilMoisturePct != null && t.SoilValid)
             .OrderBy(t => t.Timestamp)
             .Select(t => t.SoilMoisturePct!.Value)
             .ToListAsync(stoppingToken);
 
-        var recentTemps = await db.Telemetries
+        // TemperatureC і HumidityPct завжди приходять з одного зчитування BME280
+        // (SensorService::read встановлює обидва разом під climateValid, ніколи
+        // окремо), тож один запит з тим самим Where/Take/OrderBy, звідки беремо
+        // обидва стовпці, дає ідентичний результат двом окремим запитам нижче —
+        // без зайвого round trip до SQLite.
+        var recentClimate = await db.Telemetries
             .Where(t => t.TemperatureC != null)
             .OrderByDescending(t => t.Timestamp)
             .Take(MinSustainedReadings)
-            .Select(t => t.TemperatureC!.Value)
+            .Select(t => new { Temp = t.TemperatureC!.Value, Humidity = t.HumidityPct!.Value })
             .ToListAsync(stoppingToken);
-
-        var recentHumidity = await db.Telemetries
-            .Where(t => t.HumidityPct != null)
-            .OrderByDescending(t => t.Timestamp)
-            .Take(MinSustainedReadings)
-            .Select(t => t.HumidityPct!.Value)
-            .ToListAsync(stoppingToken);
+        var recentTemps = recentClimate.Select(t => t.Temp).ToList();
+        var recentHumidity = recentClimate.Select(t => t.Humidity).ToList();
 
         var todayStartUtc = DateTime.Now.Date.ToUniversalTime();
         var todayLightRecords = await db.Telemetries
