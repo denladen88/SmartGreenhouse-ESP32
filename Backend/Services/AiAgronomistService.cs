@@ -486,25 +486,42 @@ public class AiAgronomistService : BackgroundService
             return;
         }
 
-        // Захист від некоректної відповіді: якщо AI повернув SoilTempMaxC <= SoilTempMinC,
-        // це або вимкнуло б добір температури, або зняло стелю просушки — обидва
-        // небезпечні. Підставляємо мінімум + запас на повну потужність і логуємо.
-        var soilTempMaxC = analysis.SoilTempMaxC > analysis.SoilTempMinC
-            ? analysis.SoilTempMaxC
-            : analysis.SoilTempMinC + _agronomistOptions.SoilHeaterFullPowerDeficitC;
+        // Захист від некоректної/маніпульованої відповіді: навіть у межах min<max
+        // екстремальне значення (наприклад, 200C) небезпечне, бо ці пороги напряму
+        // рухають потужність нагрівачів у RunLocalControlAsync. Обрізаємо до
+        // фізично розумного діапазону для домашньої теплиці ДО будь-якого
+        // подальшого використання, а не лише перевіряємо порядок min/max.
+        const double MinPlausibleTempC = 0.0;
+        const double MaxPlausibleTempC = 45.0;
+
+        var tempMinC = Math.Clamp(analysis.TempMinC, MinPlausibleTempC, MaxPlausibleTempC);
+        var tempMaxC = Math.Clamp(analysis.TempMaxC, MinPlausibleTempC, MaxPlausibleTempC);
+        var humidityMinPct = Math.Clamp(analysis.HumidityMinPct, 0, 100);
+        var humidityMaxPct = Math.Clamp(analysis.HumidityMaxPct, 0, 100);
+        var soilMoistureMinPct = Math.Clamp(analysis.SoilMoistureMinPct, 0, 100);
+        var soilMoistureMaxPct = Math.Clamp(analysis.SoilMoistureMaxPct, 0, 100);
+        var soilTempMinC = Math.Clamp(analysis.SoilTempMinC, MinPlausibleTempC, MaxPlausibleTempC);
+        var dailyLightHoursTarget = Math.Clamp(analysis.DailyLightHoursTarget, 0, 24);
+
+        // Якщо AI повернув SoilTempMaxC <= SoilTempMinC, це або вимкнуло б добір
+        // температури, або зняло стелю просушки — обидва небезпечні. Підставляємо
+        // мінімум + запас на повну потужність.
+        var soilTempMaxC = analysis.SoilTempMaxC > soilTempMinC
+            ? Math.Clamp(analysis.SoilTempMaxC, MinPlausibleTempC, MaxPlausibleTempC)
+            : soilTempMinC + _agronomistOptions.SoilHeaterFullPowerDeficitC;
         if (soilTempMaxC != analysis.SoilTempMaxC)
         {
             _logger.LogWarning(
-                "AI returned SoilTempMaxC {Returned}C <= SoilTempMinC {Min}C — clamping to {Clamped}C",
+                "AI returned SoilTempMaxC {Returned}C (SoilTempMinC {Min}C) — clamped/adjusted to {Clamped}C",
                 analysis.SoilTempMaxC, analysis.SoilTempMinC, soilTempMaxC);
         }
 
         _logger.LogInformation(
             "AI profile analysis: Temp {TempMin}-{TempMax}C, Humidity {HumMin}-{HumMax}%, SoilMoisture {SoilMin}-{SoilMax}%, " +
             "SoilTemp {SoilTempMin}-{SoilTempMax}C, DailyLight {Light}h. GrowthStage: {GrowthStage}. Notes: {Notes}",
-            analysis.TempMinC, analysis.TempMaxC, analysis.HumidityMinPct, analysis.HumidityMaxPct,
-            analysis.SoilMoistureMinPct, analysis.SoilMoistureMaxPct, analysis.SoilTempMinC, soilTempMaxC,
-            analysis.DailyLightHoursTarget, analysis.GrowthStage, analysis.Notes);
+            tempMinC, tempMaxC, humidityMinPct, humidityMaxPct,
+            soilMoistureMinPct, soilMoistureMaxPct, soilTempMinC, soilTempMaxC,
+            dailyLightHoursTarget, analysis.GrowthStage, analysis.Notes);
 
         try
         {
@@ -518,15 +535,15 @@ public class AiAgronomistService : BackgroundService
                 db.PlantProfiles.Add(tracked);
             }
 
-            tracked.TempMinC = analysis.TempMinC;
-            tracked.TempMaxC = analysis.TempMaxC;
-            tracked.HumidityMinPct = analysis.HumidityMinPct;
-            tracked.HumidityMaxPct = analysis.HumidityMaxPct;
-            tracked.SoilMoistureMinPct = analysis.SoilMoistureMinPct;
-            tracked.SoilMoistureMaxPct = analysis.SoilMoistureMaxPct;
-            tracked.SoilTempMinC = analysis.SoilTempMinC;
+            tracked.TempMinC = tempMinC;
+            tracked.TempMaxC = tempMaxC;
+            tracked.HumidityMinPct = humidityMinPct;
+            tracked.HumidityMaxPct = humidityMaxPct;
+            tracked.SoilMoistureMinPct = soilMoistureMinPct;
+            tracked.SoilMoistureMaxPct = soilMoistureMaxPct;
+            tracked.SoilTempMinC = soilTempMinC;
             tracked.SoilTempMaxC = soilTempMaxC;
-            tracked.DailyLightHoursTarget = analysis.DailyLightHoursTarget;
+            tracked.DailyLightHoursTarget = dailyLightHoursTarget;
             tracked.GrowthStage = analysis.GrowthStage ?? string.Empty;
             tracked.Notes = analysis.Notes;
             tracked.LastUpdatedUtc = DateTime.UtcNow;
@@ -711,10 +728,10 @@ public class AiAgronomistService : BackgroundService
         // охолодження. Осушення повітря — робота повітряного нагрівача (нижче),
         // не витяжки.
         //
-        // Вентилятор циркуляції (FanOn, окремий від витяжки) із температурним
-        // охолодженням більше не пов'язаний — його роль тепер виключно обдув
-        // повітряного нагрівача (див. "fanOn = airHeaterPower > 0" нижче);
-        // фізичний блок вентилятор+PTC на ESP32 гарантує це навіть без команди.
+        // Вентилятор циркуляції (FanOn, окремий від витяжки) знову задіяний і
+        // при охолодженні — вмикається разом із витяжкою для перемішування
+        // повітря по обʼєму теплиці (див. "fanOn = airHeaterPower > 0 ||
+        // exhaustFanOn" нижче), а не лише для обдуву повітряного нагрівача.
         var exhaustFanWasOn = await db.AiDecisions
             .OrderByDescending(d => d.Timestamp)
             .Select(d => (bool?)d.ExhaustFanOn)
@@ -889,6 +906,15 @@ public class AiAgronomistService : BackgroundService
             soilHeaterReason = $"SoilTemp {soilTemp:0.#}C in range, SoilMoisture within {profile.SoilMoistureMaxPct:0.#}% max -> Off";
         }
 
+        // Тимчасова апаратна стеля: хоч би що вирішили правила вище, не пускаємо
+        // ґрунтовий нагрівач вище SoilHeaterMaxPower (аналог перевірки нижче для
+        // повітряного нагрівача).
+        if (soilHeaterPower > _agronomistOptions.SoilHeaterMaxPower)
+        {
+            soilHeaterReason += $" [capped -> {_agronomistOptions.SoilHeaterMaxPower}]";
+            soilHeaterPower = _agronomistOptions.SoilHeaterMaxPower;
+        }
+
         // Повітряний нагрівач: ДВА режими, обидва пропорційним ШІМ, дзеркалять
         // грілку ґрунту (RunLocalControlAsync вище):
         //   1) добір температури — коли повітря стійко нижче TempMinC, потужність
@@ -952,19 +978,21 @@ public class AiAgronomistService : BackgroundService
             airHeaterPower = _agronomistOptions.AirHeaterMaxPower;
         }
 
-        // Вентилятор циркуляції: рівно тоді, коли активний повітряний нагрівач —
-        // гріти повітря без обдуву немає сенсу (гаряче повітря стоїть біля
-        // елемента, датчик його не "бачить", тепло не розходиться по обʼєму).
-        // Не "форсування поверх іншого рішення" (як було раніше) — це ЄДИНЕ
-        // джерело цього прапорця тепер, бо в циркуляційного вентилятора немає
-        // власного незалежного тригера (той перейшов до витяжки, вище). ESP32
-        // однаково гарантує це на своєму боці (ActuatorService::applyFanOutput)
-        // — тут лише для того, щоб AiDecisionRecord/дашборд показували реальний
-        // стан вентилятора, а не завжди "Off".
-        var fanOn = airHeaterPower > 0;
-        var fanReason = fanOn
+        // Вентилятор циркуляції: два незалежні джерела.
+        //   1) активний повітряний нагрівач — гріти повітря без обдуву немає
+        //      сенсу (гаряче повітря стоїть біля елемента, датчик його не
+        //      "бачить", тепло не розходиться по обʼєму). ESP32 однаково
+        //      гарантує це на своєму боці (ActuatorService::applyFanOutput),
+        //      незалежно від цього прапорця.
+        //   2) активна витяжка (охолодження) — перемішує повітря по обʼєму
+        //      теплиці, поки витяжка виводить гаряче назовні, замість того щоб
+        //      витяжка тягнула лише з одного кутка.
+        var fanOn = airHeaterPower > 0 || exhaustFanOn;
+        var fanReason = airHeaterPower > 0
             ? $"On (air heater circulation at {airHeaterPower})"
-            : "Air heater off -> Off";
+            : exhaustFanOn
+                ? "On (circulating air while exhaust fan cools)"
+                : "Air heater off, exhaust fan off -> Off";
 
         var reason = $"{exhaustFanReason}; {fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}; {airHeaterReason}";
 

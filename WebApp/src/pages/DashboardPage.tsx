@@ -93,9 +93,24 @@ export function DashboardPage() {
     );
   }
 
+  // Часткові помилки (latest завантажився, а history/profile/decision — ні)
+  // раніше не показувались взагалі: isError вище блокує весь дашборд лише
+  // коли latest теж відсутній, а решта карток/блоків просто мовчки рендерились
+  // порожніми, ніби даних ще немає, а не "щось не завантажилось".
+  const partialErrors = [
+    historyQuery.isError && `Історія: ${(historyQuery.error as Error).message}`,
+    profileQuery.isError && `Профіль рослини: ${(profileQuery.error as Error).message}`,
+    decisionQuery.isError && `Стан актуаторів: ${(decisionQuery.error as Error).message}`,
+  ].filter(Boolean) as string[];
+
   return (
     <div className="page">
       {latest && <p className="updated-at">Оновлено: {new Date(latest.timestamp).toLocaleString('uk-UA')}</p>}
+      {partialErrors.map((msg) => (
+        <p className="error" key={msg}>
+          Не вдалось завантажити: {msg}
+        </p>
+      ))}
 
       <div className="grid">
         <MetricCard

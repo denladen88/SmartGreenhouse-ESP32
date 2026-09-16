@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useApiClient } from '../api/hooks';
 import type { AiCommand, AiDecisionRecord } from '../types';
@@ -8,6 +8,7 @@ import type { AiCommand, AiDecisionRecord } from '../types';
 // інакше два запити з різним count борються за один кеш-запис.
 export function ControlsPage() {
   const api = useApiClient();
+  const queryClient = useQueryClient();
 
   const latestDecisionQuery = useQuery({
     queryKey: ['decisions', 'latest'],
@@ -41,6 +42,13 @@ export function ControlsPage() {
   const mutation = useMutation({
     mutationFn: (command: AiCommand) => api.post<AiDecisionRecord>('/api/commands', command),
     onError: (err: Error) => setError(err.message),
+    // Без цього UI показував старий стан до 60с (refetchInterval вище) або до
+    // наступної події SignalR — сервер вже виконав команду, а екран ще ні.
+    onSuccess: (record) => {
+      if (record) {
+        queryClient.setQueryData(['decisions', 'latest'], record);
+      }
+    },
   });
 
   const send = () => {
@@ -66,7 +74,7 @@ export function ControlsPage() {
       </div>
 
       <div className="control-row">
-        <span>Вентилятор циркуляції (авто: увімкнений разом із нагрівачем повітря)</span>
+        <span>Вентилятор циркуляції (авто: увімкнений разом із нагрівачем повітря або витяжкою)</span>
         <input type="checkbox" checked={fanOn} onChange={(e) => setFanOn(e.target.checked)} />
       </div>
 

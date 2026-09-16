@@ -15,18 +15,18 @@ public:
 
   void begin();
 
-  // Викликати щоцикл loop(): перевіряє захисні таймери помпи, вентилятора та
-  // нагрівачів ґрунту й повітря (PUMP_MAX_RUNTIME_MS, FAN_MAX_RUNTIME_MS,
-  // SOIL_HEATER_MAX_RUNTIME_MS, AIR_HEATER_MAX_RUNTIME_MS) і примусово вимикає
-  // їх при перевищенні.
+  // Викликати щоцикл loop(): перевіряє захисні таймери помпи, вентилятора,
+  // світла та нагрівачів ґрунту й повітря (PUMP_MAX_RUNTIME_MS,
+  // FAN_MAX_RUNTIME_MS, LIGHT_MAX_RUNTIME_MS, SOIL_HEATER_MAX_RUNTIME_MS,
+  // AIR_HEATER_MAX_RUNTIME_MS) і примусово вимикає їх при перевищенні.
   void update();
 
   void setPump(bool on);
   void setFan(bool on);               // явний запит на вентиляцію; фактичний пін — див. isFanOn()
   void setExhaustFan(bool on);        // витяжка; незалежна від setFan()/setAirHeater()
   void setLight(uint8_t brightness); // 0 = вимкнено; обрізається до LIGHT_MAX_BRIGHTNESS (800 мА), а не 255
-  void setSoilHeater(uint8_t power);  // 0 = вимкнено, 255 = максимальна потужність
-  void setAirHeater(uint8_t power);   // 0 = вимкнено, 255 = максимальна потужність; ненульова потужність тримає вентилятор увімкненим
+  void setSoilHeater(uint8_t power);  // 0 = вимкнено; обрізається до SOIL_HEATER_MAX_POWER
+  void setAirHeater(uint8_t power);   // 0 = вимкнено; обрізається до AIR_HEATER_MAX_POWER; ненульова потужність тримає вентилятор увімкненим
 
   bool isPumpOn() const { return _pumpOn; }
   bool isFanOn() const { return _fanRequested || _airHeaterPower > 0; } // фактичний стан FAN_PIN, не лише останній setFan()
@@ -48,6 +48,7 @@ private:
   unsigned long _pumpStartMs = 0;        // millis() моменту останнього вмикання помпи
   unsigned long _fanStartMs = 0;         // millis() моменту останнього явного запиту вентиляції
   unsigned long _exhaustFanStartMs = 0;  // millis() моменту останнього підтвердження витяжки
+  unsigned long _lightStartMs = 0;       // millis() моменту останнього підтвердження світла
   unsigned long _soilHeaterStartMs = 0;  // millis() моменту останнього підтвердження нагрівача ґрунту
   unsigned long _airHeaterStartMs = 0;   // millis() моменту останнього підтвердження нагрівача повітря
 };

@@ -70,7 +70,7 @@ export function ControlsScreen() {
       </View>
 
       <View style={styles.row}>
-        <Text style={styles.label}>Вентилятор циркуляції (авто: разом із нагрівачем повітря)</Text>
+        <Text style={styles.label}>Вентилятор циркуляції (авто: разом із нагрівачем повітря або витяжкою)</Text>
         <Switch value={fanOn} onValueChange={setFanOn} />
       </View>
 

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SmartGreenhouse.Backend.Data;
@@ -6,7 +7,14 @@ using SmartGreenhouse.Backend.Services;
 
 namespace SmartGreenhouse.Backend.Controllers;
 
-public record PlantingRequest(string PlantName, string SoilType, DateTime PlantedDateUtc, string? Notes);
+// Довжини обмежені не лише проти "роздутої" БД, а й тому, що PlantName/Notes
+// підставляються прямо в промпт до Gemini (AiAgronomistService) — довший
+// текст, у якому легше заховати спробу маніпуляції відповіддю LLM.
+public record PlantingRequest(
+    [property: MaxLength(100)] string PlantName,
+    [property: MaxLength(100)] string SoilType,
+    DateTime PlantedDateUtc,
+    [property: MaxLength(2000)] string? Notes);
 
 // Онбординг нової посадки — замінює правку appsettings.json:Plant + перезапуск
 // Backend на POST з мобільного застосунку. Див. розділ "Ініціалізація нової

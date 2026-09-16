@@ -57,6 +57,13 @@ void ActuatorService::update() {
     setExhaustFan(false);
   }
 
+  // Той самий захист для світла (LIGHT_MAX_RUNTIME_MS) — див. Config.h.
+  if (_lightBrightness > 0 && (millis() - _lightStartMs >= LIGHT_MAX_RUNTIME_MS)) {
+    Serial.printf("[СВІТЛО] УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
+                  LIGHT_MAX_RUNTIME_MS);
+    setLight(0);
+  }
+
   // Той самий захист для ґрунтового нагрівача (SOIL_HEATER_MAX_RUNTIME_MS) — див. Config.h.
   if (_soilHeaterPower > 0 && (millis() - _soilHeaterStartMs >= SOIL_HEATER_MAX_RUNTIME_MS)) {
     Serial.printf("[НАГРІВАЧ]  УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
@@ -121,11 +128,24 @@ void ActuatorService::setLight(uint8_t brightness) {
                   brightness, LIGHT_MAX_BRIGHTNESS);
     brightness = LIGHT_MAX_BRIGHTNESS;
   }
+  // Той самий принцип, що й у вентилятора/витяжки: таймер оновлюється на
+  // кожну команду "увімкнено" (не лише перехід off->on), бо очікується
+  // безперервна робота з періодичним підтвердженням від бекенда.
+  if (brightness > 0) {
+    _lightStartMs = millis();
+  }
   _lightBrightness = brightness;
   ledcWrite(LED_PWM_CHANNEL, brightness);
 }
 
 void ActuatorService::setSoilHeater(uint8_t power) {
+  // Апаратний захист, як у setLight() (LIGHT_MAX_BRIGHTNESS) — не довіряємо,
+  // що бекенд чи ручний override завжди пришле безпечне значення.
+  if (power > SOIL_HEATER_MAX_POWER) {
+    Serial.printf("[ҐРУНТ. НАГРІВАЧ] Запит %d обрізано до безпечного максимуму %d.\n",
+                  power, SOIL_HEATER_MAX_POWER);
+    power = SOIL_HEATER_MAX_POWER;
+  }
   // Той самий принцип, що й у вентилятора: таймер оновлюється на кожну
   // команду "увімкнено" (не лише перехід off->on), бо очікується
   // безперервна робота з періодичним підтвердженням від бекенда.
@@ -137,6 +157,12 @@ void ActuatorService::setSoilHeater(uint8_t power) {
 }
 
 void ActuatorService::setAirHeater(uint8_t power) {
+  // Апаратний захист, як у setSoilHeater()/setLight().
+  if (power > AIR_HEATER_MAX_POWER) {
+    Serial.printf("[ПОВІТР. НАГРІВАЧ] Запит %d обрізано до безпечного максимуму %d.\n",
+                  power, AIR_HEATER_MAX_POWER);
+    power = AIR_HEATER_MAX_POWER;
+  }
   // Той самий принцип, що й у ґрунтового нагрівача: таймер оновлюється на
   // кожну команду "увімкнено" (не лише перехід off->on), бо очікується
   // безперервна робота з періодичним підтвердженням від бекенда.
