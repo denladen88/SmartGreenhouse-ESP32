@@ -15,4 +15,5 @@ private:
   void connect();
 
   NonBlockingTimer _reconnectTimer;
+  bool _wasConnected = false;
 };

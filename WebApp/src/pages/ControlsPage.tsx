@@ -20,6 +20,7 @@ export function ControlsPage() {
 
   const [pumpOn, setPumpOn] = useState(false);
   const [fanOn, setFanOn] = useState(false);
+  const [exhaustFanOn, setExhaustFanOn] = useState(false);
   const [lightBrightness, setLightBrightness] = useState(0);
   const [soilHeaterPower, setSoilHeaterPower] = useState(0);
   const [airHeaterPower, setAirHeaterPower] = useState(0);
@@ -29,6 +30,7 @@ export function ControlsPage() {
     if (latest) {
       setPumpOn(latest.pumpOn);
       setFanOn(latest.fanOn);
+      setExhaustFanOn(latest.exhaustFanOn);
       setLightBrightness(latest.lightBrightness);
       setSoilHeaterPower(latest.soilHeaterPower);
       setAirHeaterPower(latest.airHeaterPower);
@@ -46,6 +48,7 @@ export function ControlsPage() {
     mutation.mutate({
       pump_on: pumpOn,
       fan_on: fanOn,
+      exhaust_fan_on: exhaustFanOn,
       light_brightness: Math.round(lightBrightness),
       soil_heater_power: Math.round(soilHeaterPower),
       air_heater_power: Math.round(airHeaterPower),
@@ -63,8 +66,13 @@ export function ControlsPage() {
       </div>
 
       <div className="control-row">
-        <span>Вентилятор</span>
+        <span>Вентилятор циркуляції (авто: увімкнений разом із нагрівачем повітря)</span>
         <input type="checkbox" checked={fanOn} onChange={(e) => setFanOn(e.target.checked)} />
+      </div>
+
+      <div className="control-row">
+        <span>Витяжка (охолодження)</span>
+        <input type="checkbox" checked={exhaustFanOn} onChange={(e) => setExhaustFanOn(e.target.checked)} />
       </div>
 
       <div className="slider-block">

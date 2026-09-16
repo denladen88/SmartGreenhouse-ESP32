@@ -152,8 +152,8 @@ export function DashboardPage() {
         <div className="profile-box">
           <div className="profile-title">Актуатори</div>
           <div className="profile-line">
-            Насос: {decision.pumpOn ? 'Увімк' : 'Вимк'} · Вентилятор: {decision.fanOn ? 'Увімк' : 'Вимк'} · Світло:{' '}
-            {decision.lightBrightness}
+            Насос: {decision.pumpOn ? 'Увімк' : 'Вимк'} · Вентилятор: {decision.fanOn ? 'Увімк' : 'Вимк'} · Витяжка:{' '}
+            {decision.exhaustFanOn ? 'Увімк' : 'Вимк'} · Світло: {decision.lightBrightness}
           </div>
           <div className="profile-line">
             Нагрівач ґрунту: {decision.soilHeaterPower} · Нагрівач повітря: {decision.airHeaterPower}

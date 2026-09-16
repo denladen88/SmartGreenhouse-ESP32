@@ -23,7 +23,17 @@ void NetworkService::connect() {
 }
 
 void NetworkService::update() {
-  if (WiFi.status() != WL_CONNECTED && _reconnectTimer.elapsed()) {
+  bool connected = isConnected();
+  // Backend звертається до /capture за жорстко заданою IP (Esp32:CameraUrl
+  // у appsettings.json), а не по mDNS-імені — тож при заміні плати чи зміні
+  // DHCP-оренди єдиний спосіб дізнатись актуальну адресу без доступу до
+  // роутера це цей лог, друкований одноразово на кожен новий конект.
+  if (connected && !_wasConnected) {
+    Serial.printf("[WiFi] Підключено. IP: %s\n", WiFi.localIP().toString().c_str());
+  }
+  _wasConnected = connected;
+
+  if (!connected && _reconnectTimer.elapsed()) {
     Serial.println("[WiFi] З'єднання відсутнє, повторна спроба...");
     connect();
   }

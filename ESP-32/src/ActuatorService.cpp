@@ -7,8 +7,10 @@ ActuatorService::ActuatorService() {}
 void ActuatorService::begin() {
   pinMode(PUMP_RELAY_PIN, OUTPUT);
   pinMode(FAN_PIN, OUTPUT);
+  pinMode(EXHAUST_FAN_PIN, OUTPUT);
   digitalWrite(PUMP_RELAY_PIN, LOW);
   digitalWrite(FAN_PIN, LOW);
+  digitalWrite(EXHAUST_FAN_PIN, LOW);
 
   ledcSetup(LED_PWM_CHANNEL, LED_PWM_FREQ_HZ, LED_PWM_RESOLUTION_BITS);
   ledcAttachPin(LIGHT_PIN, LED_PWM_CHANNEL);
@@ -42,10 +44,17 @@ void ActuatorService::update() {
   }
 
   // Той самий захист для вентилятора (FAN_MAX_RUNTIME_MS) — див. коментар у Config.h.
-  if (_fanOn && (millis() - _fanStartMs >= FAN_MAX_RUNTIME_MS)) {
+  if (_fanRequested && (millis() - _fanStartMs >= FAN_MAX_RUNTIME_MS)) {
     Serial.printf("[ВЕНТИЛЯТОР] УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
                   FAN_MAX_RUNTIME_MS);
     setFan(false);
+  }
+
+  // Той самий захист для витяжки (EXHAUST_FAN_MAX_RUNTIME_MS) — див. Config.h.
+  if (_exhaustFanOn && (millis() - _exhaustFanStartMs >= EXHAUST_FAN_MAX_RUNTIME_MS)) {
+    Serial.printf("[ВИТЯЖКА]  УВАГА: перевищено безпечний час роботи (%lu мс) — аварійне вимкнення!\n",
+                  EXHAUST_FAN_MAX_RUNTIME_MS);
+    setExhaustFan(false);
   }
 
   // Той самий захист для ґрунтового нагрівача (SOIL_HEATER_MAX_RUNTIME_MS) — див. Config.h.
@@ -88,11 +97,30 @@ void ActuatorService::setFan(bool on) {
   if (on) {
     _fanStartMs = millis();
   }
-  _fanOn = on;
-  digitalWrite(FAN_PIN, on ? HIGH : LOW);
+  _fanRequested = on;
+  applyFanOutput();
+}
+
+void ActuatorService::setExhaustFan(bool on) {
+  // Та сама Pattern B, що й у вентилятора циркуляції: безперервна робота,
+  // поки бекенд підтверджує рішення щотіку — таймер оновлюється на кожен
+  // виклик з on=true, не лише на переході OFF->ON. На відміну від setFan(),
+  // тут немає жодного зв'язку з іншими актуаторами — просте незалежне реле.
+  if (on) {
+    _exhaustFanStartMs = millis();
+  }
+  _exhaustFanOn = on;
+  digitalWrite(EXHAUST_FAN_PIN, on ? HIGH : LOW);
 }
 
 void ActuatorService::setLight(uint8_t brightness) {
+  // Апаратний захист діода (див. LIGHT_MAX_BRIGHTNESS у Config.h) — не
+  // довіряємо, що бекенд чи ручний override завжди пришле безпечне значення.
+  if (brightness > LIGHT_MAX_BRIGHTNESS) {
+    Serial.printf("[СВІТЛО] Запит %d обрізано до безпечного максимуму %d.\n",
+                  brightness, LIGHT_MAX_BRIGHTNESS);
+    brightness = LIGHT_MAX_BRIGHTNESS;
+  }
   _lightBrightness = brightness;
   ledcWrite(LED_PWM_CHANNEL, brightness);
 }
@@ -117,4 +145,11 @@ void ActuatorService::setAirHeater(uint8_t power) {
   }
   _airHeaterPower = power;
   ledcWrite(AIR_HEATER_PWM_CHANNEL, power);
+  // Обдув без вентилятора не має сенсу — тепло застоюється біля елемента,
+  // датчик його не бачить. Вентилятор і нагрівач — один фізичний блок.
+  applyFanOutput();
+}
+
+void ActuatorService::applyFanOutput() {
+  digitalWrite(FAN_PIN, isFanOn() ? HIGH : LOW);
 }

@@ -8,8 +8,9 @@ function DecisionRow({ item }: { item: AiDecisionRecord }) {
     <div className="history-row">
       <div className="timestamp">{new Date(item.timestamp).toLocaleString('uk-UA')}</div>
       <div className="state">
-        Насос: {item.pumpOn ? 'Увімк' : 'Вимк'} · Вентилятор: {item.fanOn ? 'Увімк' : 'Вимк'} · Світло:{' '}
-        {item.lightBrightness} · Нагрівач ґрунту: {item.soilHeaterPower} · Нагрівач повітря: {item.airHeaterPower}
+        Насос: {item.pumpOn ? 'Увімк' : 'Вимк'} · Вентилятор: {item.fanOn ? 'Увімк' : 'Вимк'} · Витяжка:{' '}
+        {item.exhaustFanOn ? 'Увімк' : 'Вимк'} · Світло: {item.lightBrightness} · Нагрівач ґрунту:{' '}
+        {item.soilHeaterPower} · Нагрівач повітря: {item.airHeaterPower}
       </div>
       <div className="reason">{item.reason}</div>
       {item.photoDescription && <div className="photo-description">{item.photoDescription}</div>}

@@ -21,6 +21,7 @@ export interface AiDecisionRecord {
   timestamp: string;
   pumpOn: boolean;
   fanOn: boolean;
+  exhaustFanOn: boolean;
   lightBrightness: number;
   soilHeaterPower: number;
   airHeaterPower: number;
@@ -31,6 +32,7 @@ export interface AiDecisionRecord {
 export interface AiCommand {
   pump_on: boolean;
   fan_on: boolean;
+  exhaust_fan_on: boolean;
   light_brightness: number;
   soil_heater_power: number;
   air_heater_power: number;

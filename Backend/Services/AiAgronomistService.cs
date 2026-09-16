@@ -221,14 +221,14 @@ public class AiAgronomistService : BackgroundService
     // від локального контролера чи від будь-чого іншого) — щоб примусове
     // вмикання світла для нічного фото не зачепило pump/fan і щоб потім було
     // куди повертати світло назад.
-    private async Task<(bool PumpOn, bool FanOn, int LightBrightness, int SoilHeaterPower, int AirHeaterPower)> GetLatestActuatorStateAsync(CancellationToken stoppingToken)
+    private async Task<(bool PumpOn, bool FanOn, bool ExhaustFanOn, int LightBrightness, int SoilHeaterPower, int AirHeaterPower)> GetLatestActuatorStateAsync(CancellationToken stoppingToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var latest = await db.AiDecisions.OrderByDescending(d => d.Timestamp).FirstOrDefaultAsync(stoppingToken);
         return latest is null
-            ? (false, false, 0, 0, 0)
-            : (latest.PumpOn, latest.FanOn, latest.LightBrightness, latest.SoilHeaterPower, latest.AirHeaterPower);
+            ? (false, false, false, 0, 0, 0)
+            : (latest.PumpOn, latest.FanOn, latest.ExhaustFanOn, latest.LightBrightness, latest.SoilHeaterPower, latest.AirHeaterPower);
     }
 
     // Одна повна спроба отримати кадр з ESP32-CAM. Повертає null, якщо камера
@@ -260,8 +260,8 @@ public class AiAgronomistService : BackgroundService
 
             _logger.LogInformation("No photo (likely night per ESP32) — forcing grow light on for a proper shot and retrying");
             await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
-                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, 255, previousDecision.SoilHeaterPower,
-                    previousDecision.AirHeaterPower)));
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.ExhaustFanOn, 255,
+                    previousDecision.SoilHeaterPower, previousDecision.AirHeaterPower)));
 
             await Task.Delay(TimeSpan.FromSeconds(65), stoppingToken);
 
@@ -276,8 +276,8 @@ public class AiAgronomistService : BackgroundService
             }
 
             await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
-                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.LightBrightness,
-                    previousDecision.SoilHeaterPower, previousDecision.AirHeaterPower)));
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.ExhaustFanOn,
+                    previousDecision.LightBrightness, previousDecision.SoilHeaterPower, previousDecision.AirHeaterPower)));
         }
 
         if (imageBytes.Length == 0)
@@ -433,8 +433,11 @@ public class AiAgronomistService : BackgroundService
             "range from the trend shape and actuator history above, not just a snapshot), the minimum AND maximum soil " +
             "temperature (root-zone, not air) it should be kept between, and how many hours of effective light (sun and/or " +
             "grow light combined) it needs per day. These ranges will be used directly by simple automated rules — not by " +
-            "you — to control the pump, fan, grow light, an air heater, and a soil heating mat until your next review. " +
-            "The fan is cooling only: it turns on when air temperature is sustained above TempMaxC. The air heater runs " +
+            "you — to control the pump, two fans, grow light, an air heater, and a soil heating mat until your next review. " +
+            "There are two fans with distinct roles. The exhaust fan is cooling only: it vents air outward and turns on " +
+            "when air temperature is sustained above TempMaxC. The circulation fan has no independent trigger of its own " +
+            "— it runs automatically whenever the air heater is active (it's the heater's only airflow) and is off " +
+            "otherwise, so it isn't something your ranges control directly. The air heater runs " +
             "in two modes, both proportional (no on/off jumps): temperature make-up whenever air temperature is sustained " +
             "below TempMinC (power ramps up with the deficit), AND (separately) dehumidification whenever air humidity is " +
             "sustained above HumidityMaxPct — warming the air drives relative humidity down and keeps condensation off " +
@@ -553,6 +556,7 @@ public class AiAgronomistService : BackgroundService
         {
             var last = segments.Count > 0 ? segments[^1] : null;
             if (last is not null && last.Sample.PumpOn == d.PumpOn && last.Sample.FanOn == d.FanOn &&
+                last.Sample.ExhaustFanOn == d.ExhaustFanOn &&
                 last.Sample.LightBrightness == d.LightBrightness && last.Sample.SoilHeaterPower == d.SoilHeaterPower &&
                 last.Sample.AirHeaterPower == d.AirHeaterPower)
             {
@@ -566,7 +570,8 @@ public class AiAgronomistService : BackgroundService
 
         return string.Join("\n", segments.TakeLast(_agronomistOptions.DecisionHistoryCount).Select(s =>
             $"{s.Start:MM-dd HH:mm}-{s.End:HH:mm} ({s.Count}x) Pump={(s.Sample.PumpOn ? "On" : "Off")} " +
-            $"Fan={(s.Sample.FanOn ? "On" : "Off")} Light={s.Sample.LightBrightness} " +
+            $"Fan={(s.Sample.FanOn ? "On" : "Off")} ExhaustFan={(s.Sample.ExhaustFanOn ? "On" : "Off")} " +
+            $"Light={s.Sample.LightBrightness} " +
             $"SoilHeater={s.Sample.SoilHeaterPower} AirHeater={s.Sample.AirHeaterPower} — {s.Sample.Reason}"));
     }
 
@@ -694,26 +699,31 @@ public class AiAgronomistService : BackgroundService
             .Select(t => t.SoilTempC)
             .FirstOrDefaultAsync(stoppingToken);
 
-        // Вентилятор: ТІЛЬКИ охолодження повітря. Вмикається, коли останні
-        // MinSustainedReadings замірів температури всі вище PlantProfile.TempMaxC
-        // (стійкий перегрів, а не один випадковий стрибок), і працює далі з
-        // гістерезисом — доки повітря не охолоне до (TempMaxC - FanHysteresisC).
-        // Без цього "мертвого діапазону" реле смикало б туди-сюди щоразу, коли
-        // температура тремтить рівно біля стелі.
+        // Витяжка: ТІЛЬКИ охолодження повітря (виводить його назовні). Вмикається,
+        // коли останні MinSustainedReadings замірів температури всі вище
+        // PlantProfile.TempMaxC (стійкий перегрів, а не один випадковий стрибок),
+        // і працює далі з гістерезисом — доки повітря не охолоне до
+        // (TempMaxC - ExhaustFanHysteresisC). Без цього "мертвого діапазону" реле
+        // смикало б туди-сюди щоразу, коли температура тремтить рівно біля стелі.
         //
-        // Вологість більше НЕ керує вентилятором (прибрано на прохання) — тепер
-        // це суто температурний прилад на охолодження. Підігрів повітря буде
-        // окремим ШІМ-актуатором (як грілка ґрунту), а не цим реле: вентилятор
-        // фізично гріти не може, лише ганяти повітря.
-        var fanWasOn = await db.AiDecisions
+        // Вологість більше НЕ керує витяжкою (прибрано на прохання ще для
+        // попереднього вентилятора) — це суто температурний прилад на
+        // охолодження. Осушення повітря — робота повітряного нагрівача (нижче),
+        // не витяжки.
+        //
+        // Вентилятор циркуляції (FanOn, окремий від витяжки) із температурним
+        // охолодженням більше не пов'язаний — його роль тепер виключно обдув
+        // повітряного нагрівача (див. "fanOn = airHeaterPower > 0" нижче);
+        // фізичний блок вентилятор+PTC на ESP32 гарантує це навіть без команди.
+        var exhaustFanWasOn = await db.AiDecisions
             .OrderByDescending(d => d.Timestamp)
-            .Select(d => (bool?)d.FanOn)
+            .Select(d => (bool?)d.ExhaustFanOn)
             .FirstOrDefaultAsync(stoppingToken) ?? false;
 
         var latestTemp = recentTemps.Count > 0 ? (double?)recentTemps[0] : null;
         var tempSustainedHigh = recentTemps.Count >= MinSustainedReadings &&
             recentTemps.All(t => t > profile.TempMaxC);
-        var fanReleaseTempC = profile.TempMaxC - _agronomistOptions.FanHysteresisC;
+        var exhaustFanReleaseTempC = profile.TempMaxC - _agronomistOptions.ExhaustFanHysteresisC;
 
         // Для повітряного нагрівача (нижче): стійко холодне повітря — усі останні
         // MinSustainedReadings замірів нижче TempMinC; стійко волога — усі
@@ -726,25 +736,25 @@ public class AiAgronomistService : BackgroundService
             recentHumidity.Count >= MinSustainedReadings &&
             recentHumidity.All(h => h > profile.HumidityMaxPct);
 
-        bool fanOn;
-        string fanReason;
+        bool exhaustFanOn;
+        string exhaustFanReason;
         if (tempSustainedHigh)
         {
-            fanOn = true;
-            fanReason = $"Temp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C > max " +
+            exhaustFanOn = true;
+            exhaustFanReason = $"Temp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C > max " +
                 $"{profile.TempMaxC:0.#}C ({recentTemps.Count} readings) -> On (cooling)";
         }
-        else if (fanWasOn && latestTemp is { } stillWarm && stillWarm > fanReleaseTempC)
+        else if (exhaustFanWasOn && latestTemp is { } stillWarm && stillWarm > exhaustFanReleaseTempC)
         {
-            fanOn = true;
-            fanReason = $"Temp {stillWarm:0.#}C still above release {fanReleaseTempC:0.#}C " +
-                $"(max {profile.TempMaxC:0.#}C - hysteresis {_agronomistOptions.FanHysteresisC:0.#}C) -> On (cooling)";
+            exhaustFanOn = true;
+            exhaustFanReason = $"Temp {stillWarm:0.#}C still above release {exhaustFanReleaseTempC:0.#}C " +
+                $"(max {profile.TempMaxC:0.#}C - hysteresis {_agronomistOptions.ExhaustFanHysteresisC:0.#}C) -> On (cooling)";
         }
         else
         {
-            fanOn = false;
-            fanReason = latestTemp is { } coolEnough
-                ? $"Temp {coolEnough:0.#}C <= release {fanReleaseTempC:0.#}C (max {profile.TempMaxC:0.#}C) -> Off"
+            exhaustFanOn = false;
+            exhaustFanReason = latestTemp is { } coolEnough
+                ? $"Temp {coolEnough:0.#}C <= release {exhaustFanReleaseTempC:0.#}C (max {profile.TempMaxC:0.#}C) -> Off"
                 : "No air temperature readings -> Off";
         }
 
@@ -942,23 +952,27 @@ public class AiAgronomistService : BackgroundService
             airHeaterPower = _agronomistOptions.AirHeaterMaxPower;
         }
 
-        // Гріти повітря без обдуву немає сенсу: гаряче повітря стоїть біля
-        // елемента, датчик його не "бачить", тепло не розходиться по обʼєму. Тож
-        // поки повітряний нагрівач працює — вентилятор примусово увімкнено
-        // (циркуляція, не охолодження). ESP32 оновлює FAN_MAX_RUNTIME_MS на кожну
-        // "on"-команду, тож безперервна робота разом із нагрівачем безпечна.
-        if (airHeaterPower > 0 && !fanOn)
-        {
-            fanOn = true;
-            fanReason += $"; forced On (air heater circulation at {airHeaterPower})";
-        }
+        // Вентилятор циркуляції: рівно тоді, коли активний повітряний нагрівач —
+        // гріти повітря без обдуву немає сенсу (гаряче повітря стоїть біля
+        // елемента, датчик його не "бачить", тепло не розходиться по обʼєму).
+        // Не "форсування поверх іншого рішення" (як було раніше) — це ЄДИНЕ
+        // джерело цього прапорця тепер, бо в циркуляційного вентилятора немає
+        // власного незалежного тригера (той перейшов до витяжки, вище). ESP32
+        // однаково гарантує це на своєму боці (ActuatorService::applyFanOutput)
+        // — тут лише для того, щоб AiDecisionRecord/дашборд показували реальний
+        // стан вентилятора, а не завжди "Off".
+        var fanOn = airHeaterPower > 0;
+        var fanReason = fanOn
+            ? $"On (air heater circulation at {airHeaterPower})"
+            : "Air heater off -> Off";
 
-        var reason = $"{fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}; {airHeaterReason}";
+        var reason = $"{exhaustFanReason}; {fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}; {airHeaterReason}";
 
         var decisionRecord = new AiDecisionRecord
         {
             PumpOn = pumpOn,
             FanOn = fanOn,
+            ExhaustFanOn = exhaustFanOn,
             LightBrightness = lightBrightness,
             SoilHeaterPower = soilHeaterPower,
             AirHeaterPower = airHeaterPower,
@@ -974,12 +988,13 @@ public class AiAgronomistService : BackgroundService
         // це покладаються FAN_MAX_RUNTIME_MS/помпові/нагрівача failsafe-таймери на
         // ESP32, які без повторної команди самі гасять актуатор.
         var commandPayload = JsonSerializer.Serialize(
-            new AiCommand(pumpOn, fanOn, lightBrightness, soilHeaterPower, airHeaterPower));
+            new AiCommand(pumpOn, fanOn, exhaustFanOn, lightBrightness, soilHeaterPower, airHeaterPower));
         await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, commandPayload);
 
         _logger.LogInformation(
-            "Local control decision: Pump={Pump} Fan={Fan} Light={Light} SoilHeater={SoilHeater} AirHeater={AirHeater} — {Reason}",
-            pumpOn ? "On" : "Off", fanOn ? "On" : "Off", lightBrightness, soilHeaterPower, airHeaterPower, reason);
+            "Local control decision: Pump={Pump} Fan={Fan} ExhaustFan={ExhaustFan} Light={Light} SoilHeater={SoilHeater} AirHeater={AirHeater} — {Reason}",
+            pumpOn ? "On" : "Off", fanOn ? "On" : "Off", exhaustFanOn ? "On" : "Off", lightBrightness, soilHeaterPower,
+            airHeaterPower, reason);
     }
 
     // ---- Спільне ----

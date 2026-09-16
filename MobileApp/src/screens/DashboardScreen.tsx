@@ -161,8 +161,8 @@ export function DashboardScreen() {
         <View style={styles.statusBox}>
           <Text style={styles.profileTitle}>Актуатори</Text>
           <Text style={styles.profileLine}>
-            Насос: {decision.pumpOn ? 'Увімк' : 'Вимк'} · Вентилятор: {decision.fanOn ? 'Увімк' : 'Вимк'} · Світло:{' '}
-            {decision.lightBrightness}
+            Насос: {decision.pumpOn ? 'Увімк' : 'Вимк'} · Вентилятор: {decision.fanOn ? 'Увімк' : 'Вимк'} · Витяжка:{' '}
+            {decision.exhaustFanOn ? 'Увімк' : 'Вимк'} · Світло: {decision.lightBrightness}
           </Text>
           <Text style={styles.profileLine}>
             Нагрівач ґрунту: {decision.soilHeaterPower} · Нагрівач повітря: {decision.airHeaterPower}

@@ -1,4 +1,5 @@
 #include "CameraService.h"
+#include <Arduino.h>
 #include "esp_camera.h"
 
 // Піни камери OV3660
@@ -84,18 +85,13 @@ bool CameraService::begin() {
   return true;
 }
 
-int CameraService::captureFrameSize() {
-  if (!_ready) {
-    return -1;
+void CameraService::retryIfDown() {
+  if (_ready || !_retryTimer.elapsed()) {
+    return;
   }
-
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    return -1;
-  }
-  int len = (int)fb->len;
-  esp_camera_fb_return(fb);
-  return len;
+  Serial.println("[CAM] Спроба переініціалізації камери...");
+  esp_camera_deinit(); // безпечно навіть якщо init так і не пройшов
+  begin();
 }
 
 bool CameraService::captureJpeg(const uint8_t** buf, size_t* len) {

@@ -18,6 +18,11 @@ public:
 
   void reset() { _lastTrigger = millis(); }
 
+  // Робить наступний elapsed() істинним негайно (лічильник «постарішав» на цілий
+  // інтервал). Зручно, щоб перша періодична дія відбулась одразу після події
+  // (напр. перша телеметрія відразу після конекту, а не через повний інтервал).
+  void expire() { _lastTrigger = millis() - _intervalMs; }
+
 private:
   unsigned long _intervalMs;
   unsigned long _lastTrigger = 0;

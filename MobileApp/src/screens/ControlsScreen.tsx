@@ -27,6 +27,7 @@ export function ControlsScreen() {
 
   const [pumpOn, setPumpOn] = useState(false);
   const [fanOn, setFanOn] = useState(false);
+  const [exhaustFanOn, setExhaustFanOn] = useState(false);
   const [lightBrightness, setLightBrightness] = useState(0);
   const [soilHeaterPower, setSoilHeaterPower] = useState(0);
   const [airHeaterPower, setAirHeaterPower] = useState(0);
@@ -38,6 +39,7 @@ export function ControlsScreen() {
     if (latest) {
       setPumpOn(latest.pumpOn);
       setFanOn(latest.fanOn);
+      setExhaustFanOn(latest.exhaustFanOn);
       setLightBrightness(latest.lightBrightness);
       setSoilHeaterPower(latest.soilHeaterPower);
       setAirHeaterPower(latest.airHeaterPower);
@@ -53,6 +55,7 @@ export function ControlsScreen() {
     mutation.mutate({
       pump_on: pumpOn,
       fan_on: fanOn,
+      exhaust_fan_on: exhaustFanOn,
       light_brightness: Math.round(lightBrightness),
       soil_heater_power: Math.round(soilHeaterPower),
       air_heater_power: Math.round(airHeaterPower),
@@ -67,8 +70,13 @@ export function ControlsScreen() {
       </View>
 
       <View style={styles.row}>
-        <Text style={styles.label}>Вентилятор</Text>
+        <Text style={styles.label}>Вентилятор циркуляції (авто: разом із нагрівачем повітря)</Text>
         <Switch value={fanOn} onValueChange={setFanOn} />
+      </View>
+
+      <View style={styles.row}>
+        <Text style={styles.label}>Витяжка (охолодження)</Text>
+        <Switch value={exhaustFanOn} onValueChange={setExhaustFanOn} />
       </View>
 
       <View style={styles.sliderBlock}>

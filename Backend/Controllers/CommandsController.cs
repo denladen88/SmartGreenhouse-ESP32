@@ -41,6 +41,7 @@ public class CommandsController : ControllerBase
         {
             PumpOn = command.PumpOn,
             FanOn = command.FanOn,
+            ExhaustFanOn = command.ExhaustFanOn,
             LightBrightness = command.LightBrightness,
             SoilHeaterPower = command.SoilHeaterPower,
             AirHeaterPower = command.AirHeaterPower,

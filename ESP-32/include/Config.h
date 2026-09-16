@@ -35,19 +35,21 @@ constexpr int SOIL_RAW_WET = 1270;
 constexpr int SOIL_RAW_DRY = 4095;
 
 // ---- Ґрунтовий термодатчик (DS18B20, OneWire) ----
-// GPIO21: МАЄ бути пін <= 33. Бібліотека paulstoffregen/OneWire 2.3.8 у
+// GPIO14: МАЄ бути пін <= 33. Бібліотека paulstoffregen/OneWire 2.3.8 у
 // util/OneWire_direct_gpio.h (directModeOutput, рядок ~240) має перевірку
 // `pin <= 33` — успадковану від ESP32 classic, де GPIO34-39 були тільки
 // входами. На пінах >33 функція мовчки нічого не робить: лінія ніколи не
 // перемикається у вихід, reset-імпульс не формується, presence немає,
 // reset()==0, getDeviceCount()==0. На ESP32-S3 усі GPIO двонапрямлені, але
-// бібліотека цього не враховує — тож GPIO38/39/40/41 тут не годяться.
-// GPIO21 звільнено з-під вентилятора (той перенесено на GPIO40): вентилятор
-// керується через digitalWrite() ядра Arduino, яке коректно працює на пінах
-// >33, тож саме він, а не OneWire, іде на "високий" пін. Решта пінів <=33
-// зайнята: камера 4-13/15-18, 26-37 октальна PSRAM/flash, 1-3 сенсори/ADC,
-// 45/47 світло/помпа, 19/20 USB, 0/3 strapping.
-constexpr int SOIL_TEMP_ONEWIRE_PIN = 21;
+// бібліотека цього не враховує — тож GPIO38/39/40/41/42 тут не годяться.
+// Придатні (<=33, вільні від камери 4-13/15-18, 26-37 октальної PSRAM/flash,
+// 1-3 сенсорів/ADC, 45/47 світла/помпи, 19/20 USB, 0/3 strapping): GPIO14 і
+// GPIO21. Зараз знову GPIO14 (фізично на ряду пінів J1, окремо від решти
+// сенсорів) — не забути перенести й сам дріт+pull-up на цей ряд. Сидить на
+// ADC2, який конфліктує з Wi-Fi — але лише при analogRead(); OneWire суто
+// цифровий (digitalWrite() + читання рівнів), тож цей конфлікт тут не
+// застосовується.
+constexpr int SOIL_TEMP_ONEWIRE_PIN = 14;
 
 // ---- Підігрів ґрунту (DC грілка-мат через MOSFET-модуль, ШІМ) ----
 // GPIO39: наступний вільний пін одразу за SOIL_TEMP_ONEWIRE_PIN (38), той
@@ -55,7 +57,7 @@ constexpr int SOIL_TEMP_ONEWIRE_PIN = 21;
 // модуля). Керується так само, як grow-світло (LIGHT_PIN) — окремий
 // MOSFET-модуль на зовнішньому 12V/24V живленні, ESP32 лише подає ШІМ-сигнал.
 #define SOIL_HEATER_PIN 39
-constexpr int SOIL_HEATER_PWM_CHANNEL = 5; // канали 0 (камера) і 4 (світло) зайняті
+constexpr int SOIL_HEATER_PWM_CHANNEL = 5; // кан. 0 (камера, timer 0) і 2 (світло, timer 1) зайняті; це → timer 2
 constexpr int SOIL_HEATER_PWM_FREQ_HZ = 5000;
 constexpr int SOIL_HEATER_PWM_RESOLUTION_BITS = 8; // потужність 0-255
 
@@ -73,8 +75,11 @@ constexpr unsigned long SOIL_HEATER_MAX_RUNTIME_MS = 900000;
 // не можна, буде конфлікт шини PSRAM з буфером кадру камери. Керується як
 // grow-світло / грілка ґрунту: окремий MOSFET-модуль на зовнішньому 12V,
 // ESP32 лише подає ШІМ-сигнал.
+// AIR_HEATER_PIN і FAN_PIN — два незалежні керуючі сигнали одного фізичного
+// блоку "вентилятор+PTC-радіатор": зв'язок "нагрівач активний → вентилятор
+// увімкнений" гарантує ActuatorService::applyFanOutput(), а не ці константи.
 #define AIR_HEATER_PIN 42
-constexpr int AIR_HEATER_PWM_CHANNEL = 6; // канали 0 (камера), 4 (світло), 5 (ґрунт) зайняті
+constexpr int AIR_HEATER_PWM_CHANNEL = 6; // кан. 0 (камера), 2 (світло), 5 (ґрунт) зайняті; це → timer 3
 constexpr int AIR_HEATER_PWM_FREQ_HZ = 1000; // теплова маса велика, 5кГц як у ґрунтового зайві
 constexpr int AIR_HEATER_PWM_RESOLUTION_BITS = 8; // потужність 0-255
 
@@ -86,25 +91,54 @@ constexpr unsigned long AIR_HEATER_MAX_RUNTIME_MS = 900000;
 
 // ---- Актуатори ----
 constexpr int PUMP_RELAY_PIN = 47;
-// GPIO40: перенесено з GPIO21 (той відданий під OneWire-датчик ґрунту, якому
-// потрібен пін <=33 — див. SOIL_TEMP_ONEWIRE_PIN). Вентилятор — простий
-// цифровий вихід через digitalWrite() ядра Arduino, яке коректно драйвить
-// піни >33, тож "високий" пін безпечний саме для нього. GPIO40 за
-// замовчуванням JTAG MTDO, але як звичайний GPIO працює.
+// GPIO40 — простий цифровий вихід через digitalWrite() ядра Arduino, яке
+// коректно драйвить піни >33, тож "високий" пін безпечний саме для нього
+// (на відміну від OneWire, обмеженого <=33 — див. SOIL_TEMP_ONEWIRE_PIN).
+// GPIO40 за замовчуванням JTAG MTDO, але як звичайний GPIO працює.
+// Один вентилятор обслуговує і звичайну вентиляцію, і обдув повітряного
+// нагрівача (AIR_HEATER_PIN, вище) — це один фізичний блок.
 constexpr int FAN_PIN = 40;
 
-// Grow light: 24V біла стрічка (Philips Hue Lightstrip, RGB+TW), але з неї
-// використовуються лише окремі аналогові канали Cold White (C) і Warm White
-// (W) — це НЕ адресований WS2812-подібний протокол, це прямі лінії, кожна
-// вмикається/тьмяниться через власний MOSFET-модуль. Обидва TRIG/PWM входи
-// модулів сидять на одному GPIO (LIGHT_PIN) — один ШІМ-сигнал керує C і W
-// одночасно єдиною яскравістю (без окремого регулювання кольорової
-// температури). Керується виключно через MQTT-команду light_brightness
-// (0-255) — жодної локальної автоматики по датчику освітленості немає.
+// Витяжка: окремий вентилятор, виводить гаряче/вологе повітря назовні. На
+// відміну від FAN_PIN (циркуляція, пов'язана з AIR_HEATER_PIN), витяжка ні з
+// чим не пов'язана — просте незалежне digitalWrite-керування через setExhaustFan().
+// GPIO38: вільний пін одразу перед SOIL_HEATER_PIN(39), поза діапазоном
+// октальної PSRAM (26-37) і, на відміну від GPIO45/46, не strapping-пін.
+constexpr int EXHAUST_FAN_PIN = 38;
+
+// Grow light: один потужний світлодіод (~900 мА), керується зовнішнім
+// LED-драйвером струму (constant current) — ESP32 лише подає ШІМ-сигнал
+// димування на вхід драйвера, сам драйвер тримає задану силу струму на
+// діоді незалежно від температури/деградації переходу. Раніше тут була
+// 24V біла стрічка (Philips Hue Lightstrip, RGB+TW) з окремими Cold White/
+// Warm White каналами через два MOSFET-модулі на спільному ШІМ — тепер один
+// діод без поділу на кольорову температуру, інтерфейс керування (GPIO45,
+// та сама частота) не змінився. Керується виключно через MQTT-команду
+// light_brightness (0-255) — жодної локальної автоматики по датчику
+// освітленості немає.
+//
+// GPIO45 — strapping-пін ESP32-S3 (вибір напруги VDD_SPI для flash/PSRAM):
+// на reset має читатись LOW (тримає слабка внутрішня підтяжка до GND). Це
+// безпечно, ПОКИ вхід димування зовнішнього LED-драйвера не має підтяжки до
+// "+". Ця характеристика залежить від конкретного драйвера — з новим
+// драйвером її варто звірити з документацією заново (не факт, що збігається
+// зі старим MOSFET-модулем); якщо вхід підтягує до Vcc, на GPIO45 потрібен
+// зовнішній pull-down ~10 кОм, інакше ризик неправильного страпу flash/PSRAM
+// на старті.
 #define LIGHT_PIN 45
-constexpr int LED_PWM_CHANNEL = 4; // канали 0/timer 0 зайняті камерою (CameraService)
+// Канал 2 → LEDC timer 1 (пара каналів {2,3}). Timer 0 зайнятий камерою,
+// timer 2 — ґрунтовим нагрівачем (кан. 5), timer 3 — повітряним (кан. 6):
+// так усі чотири ШІМ-споживачі на незалежних таймерах, і зміна частоти
+// одного не переналаштовує інший.
+constexpr int LED_PWM_CHANNEL = 2;
 constexpr int LED_PWM_FREQ_HZ = 5000;
 constexpr int LED_PWM_RESOLUTION_BITS = 8; // яскравість 0-255
+
+// Апаратний захисний ліміт яскравості: 25% ШІМ-димування (63/255 ≈ 24.7%,
+// округлено ВНИЗ, щоб не перевищити межу). ActuatorService::setLight()
+// обрізає до цього значення будь-яку команду light_brightness — незалежно
+// від того, хто її надіслав (AI-контролер чи ручний override з застосунку).
+constexpr uint8_t LIGHT_MAX_BRIGHTNESS = 63;
 
 // Штатна тривалість одного "пострілу" поливу: помпа вмикається імпульсом саме
 // на цей час, а вимиканням керує сама прошивка (ActuatorService::update()
@@ -127,6 +161,10 @@ constexpr unsigned long PUMP_MAX_RUNTIME_MS = 5000;
 // процес завис) і не надіслав жодної команди довше цього ліміту — 15 хв дає
 // запас поверх 10-хвилинного циклу підтверджень.
 constexpr unsigned long FAN_MAX_RUNTIME_MS = 900000;
+
+// Той самий захист і та сама семантика, що у вентилятора циркуляції, вище
+// (макс. час без підтвердження від бекенда, не макс. безперервна робота).
+constexpr unsigned long EXHAUST_FAN_MAX_RUNTIME_MS = 900000;
 
 // ---- Мережа / телеметрія ----
 constexpr const char* DEVICE_ID = "smartplant-s3-01";
@@ -152,6 +190,5 @@ constexpr float NIGHT_LUX_THRESHOLD = 5.0f;
 // DownsampleTrend усе одно групує в 60-хв бакети.
 constexpr unsigned long SENSOR_READ_INTERVAL_MS = 60000;
 constexpr unsigned long MQTT_PUBLISH_INTERVAL_MS = 180000;
-constexpr unsigned long LIGHT_CHECK_INTERVAL_MS = 1000;
 constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 10000;
 constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;

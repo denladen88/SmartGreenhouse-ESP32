@@ -5,12 +5,24 @@
 #include "SensorService.h"
 
 // Вхідна команда з MQTT_COMMANDS_TOPIC (наприклад, від .NET-бекенду).
+// Прапорці has* кажуть, чи поле реально було в JSON: обробник застосовує лише
+// присутні поля (merge-семантика), тож часткова команда з одним ключем більше
+// не занулює решту актуаторів. Бекенд (Backend/Models/AiCommand.cs) завжди шле
+// всі 6 полів, тож для нього поведінка не змінюється.
 struct CommandData {
   bool pumpOn = false;
   bool fanOn = false;
+  bool exhaustFanOn = false;
   uint8_t lightBrightness = 0;  // 0-255, повністю замінює автоматику по BH1750
   uint8_t soilHeaterPower = 0;  // 0-255, потужність ШІМ підігріву ґрунту
   uint8_t airHeaterPower = 0;   // 0-255, потужність ШІМ підігріву повітря
+
+  bool hasPump = false;
+  bool hasFan = false;
+  bool hasExhaustFan = false;
+  bool hasLight = false;
+  bool hasSoilHeater = false;
+  bool hasAirHeater = false;
 };
 
 // Обгортка над PubSubClient: неблокуюче перепідключення, публікація

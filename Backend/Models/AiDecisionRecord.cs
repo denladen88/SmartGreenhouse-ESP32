@@ -11,6 +11,7 @@ public class AiDecisionRecord
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     public bool PumpOn { get; set; }
     public bool FanOn { get; set; }
+    public bool ExhaustFanOn { get; set; }
     public int LightBrightness { get; set; }
     public int SoilHeaterPower { get; set; }
     public int AirHeaterPower { get; set; }
