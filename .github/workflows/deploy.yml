@@ -68,8 +68,10 @@ jobs:
       - name: Write Backend/.env from secrets
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          API_KEY: ${{ secrets.API_KEY }}
         run: |
           printf 'Gemini__ApiKey=%s\n' "$GEMINI_API_KEY" > Backend/.env
+          printf 'Api__Key=%s\n' "$API_KEY" >> Backend/.env
           chmod 600 Backend/.env
 
       - name: Login to GHCR
