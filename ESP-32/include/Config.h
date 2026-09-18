@@ -210,3 +210,31 @@ constexpr unsigned long SENSOR_READ_INTERVAL_MS = 60000;
 constexpr unsigned long MQTT_PUBLISH_INTERVAL_MS = 180000;
 constexpr unsigned long WIFI_RECONNECT_INTERVAL_MS = 10000;
 constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;
+
+// ---- Стелі блокуючого MqttService::reconnect() і поріг детектора зависання ----
+// PubSubClient::connect() (викликається з MqttService::reconnect(), яка сама
+// блокуюча і викликається з loop()) проходить дві стелі ПОСЛІДОВНО в одному
+// виклику: спершу TCP-connect до брокера, потім, якщо він вдався, чекає
+// CONNACK. У гіршому разі вони СКЛАДАЮТЬСЯ — тому LOOP_HANG_THRESHOLD_MS
+// нижче МАЄ лишатись більшим за їх суму (в мс) з запасом, інакше звичайний
+// (хай і повільний) reconnect сам себе вважатиме "зависанням loop()" і
+// аварійно вимкне всі актуатори (main.cpp) навіть без жодного реального збою.
+//
+// MQTT_CONNACK_TIMEOUT_S піднято з 2с (спершу до 3с, тепер до 5с) після
+// діагностики реального збою: лог самого Mosquitto (docker logs
+// smartgreenhouse-mqtt) показав, що брокер регулярно ПРИЙМАВ і підтверджував
+// з'єднання (New client connected), а плата за частку секунди сама закривала
+// щойно встановлений сокет (disconnected: connection closed by client) — це
+// PubSubClient::connect() здававсь чекати CONNACK і сам рвав з'єднання. 2с
+// виявилось замало для гарантованого приходу CONNACK через це докерне
+// MQTT-мереживо, і це створювало зайвий reconnect-шторм замість того, щоб
+// просто почекати трохи довше. MQTT_TCP_CONNECT_TIMEOUT_S лишили 2с —
+// TCP-connect на локальній мережі в логах завжди встигав за частки секунди,
+// ця стеля майже ніколи не вичерпується.
+constexpr uint16_t MQTT_TCP_CONNECT_TIMEOUT_S = 2;
+constexpr uint16_t MQTT_CONNACK_TIMEOUT_S = 5;
+
+// (2+5)с = 7с гіршого випадку однієї спроби reconnect(); 8с лишає запас під
+// це, залишаючись досить чутливим до інших причин реального зависання loop()
+// (детектор — не лише про MQTT, див. коментар біля нього в main.cpp).
+constexpr unsigned long LOOP_HANG_THRESHOLD_MS = 8000;

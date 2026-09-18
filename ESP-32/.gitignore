@@ -1,5 +1,7 @@
 .pio
 .cache
+platformio-device-monitor-*.log
+logs/
 .dummy
 include/Secrets.h
 .vscode/.browse.c_cpp.db*

@@ -4,7 +4,27 @@
 
 ActuatorService::ActuatorService() {}
 
+void ActuatorService::pumpFailsafeCallback(void* arg) {
+  // Виконується у власній задачі esp_timer, НЕ в задачі loop() — саме тому
+  // це надійно спрацює, навіть якщо loop() зараз застряг у блокуючому
+  // MqttService::reconnect(). Пишемо пін і атомарний прапорець напряму, без
+  // виклику setPump(false) (щоб не чіпати _pumpStartMs з чужої задачі).
+  digitalWrite(PUMP_RELAY_PIN, LOW);
+  static_cast<ActuatorService*>(arg)->_pumpOn = false;
+}
+
 void ActuatorService::begin() {
+  const esp_timer_create_args_t pumpTimerArgs = {
+      .callback = &ActuatorService::pumpFailsafeCallback,
+      .arg = this,
+      .dispatch_method = ESP_TIMER_TASK,
+      .name = "pump_failsafe",
+  };
+  if (esp_timer_create(&pumpTimerArgs, &_pumpFailsafeTimer) != ESP_OK) {
+    Serial.println("[ПОМПА] УВАГА: не вдалось створити апаратний таймер захисту — лишається лише резервний перевірка в update().");
+    _pumpFailsafeTimer = nullptr;
+  }
+
   pinMode(PUMP_RELAY_PIN, OUTPUT);
   pinMode(FAN_PIN, OUTPUT);
   pinMode(EXHAUST_FAN_PIN, OUTPUT);
@@ -71,6 +91,18 @@ void ActuatorService::setPump(bool on) {
   // захисного ліміту PUMP_MAX_RUNTIME_MS.
   if (on && !_pumpOn) {
     _pumpStartMs = millis();
+    // Апаратний таймер — головний захист (спрацює навіть якщо loop() застряг
+    // довше PUMP_RUN_DURATION_MS у блокуючому MQTT-reconnect, див. коментар
+    // біля _pumpFailsafeTimer в ActuatorService.h); checkFailsafe() у
+    // update() лишається резервним другим рівнем.
+    if (_pumpFailsafeTimer) {
+      esp_timer_start_once(_pumpFailsafeTimer, (int64_t)PUMP_RUN_DURATION_MS * 1000);
+    }
+  } else if (!on && _pumpFailsafeTimer) {
+    // Вимикаємо явно (штатний postrél завершився в update(), або emergencyStopAll) —
+    // скасовуємо ще не спрацьований таймер, щоб він не "вимкнув" вже вимкнену
+    // помпу на наступному циклі ввімкнення.
+    esp_timer_stop(_pumpFailsafeTimer);
   }
   _pumpOn = on;
   digitalWrite(PUMP_RELAY_PIN, on ? HIGH : LOW);

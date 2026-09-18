@@ -1,10 +1,12 @@
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
+#include <WiFi.h>
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <memory>
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "Config.h"
 #include "NonBlockingTimer.h"
 #include "SensorService.h"
@@ -35,6 +37,31 @@ std::atomic<bool> isNight{false};
 // тож публікація бере останній збережений результат, а не читає повторно.
 SensorData lastSensorData;
 
+// Найважливіша діагностика "чому плата пішла в офлайн": якщо це не звичайний
+// перезапуск (power-on), а PANIC/WDT/BROWNOUT — плата не просто втратила
+// мережу, вона реально впала/перезавантажилась сама. Друкуємо одразу при
+// старті, до begin() усіх сервісів, щоб не загубити рядок серед подальшого логу.
+void logResetReason() {
+  esp_reset_reason_t reason = esp_reset_reason();
+  const char* text;
+  switch (reason) {
+    case ESP_RST_POWERON: text = "увімкнення живлення (нормальний старт)"; break;
+    case ESP_RST_EXT: text = "зовнішній reset (кнопка/пін RESET)"; break;
+    case ESP_RST_SW: text = "програмний reset (esp_restart())"; break;
+    case ESP_RST_PANIC: text = "АВАРІЯ — прошивка впала (exception/panic)"; break;
+    case ESP_RST_INT_WDT: text = "спрацював interrupt watchdog — щось блокувало переривання надто довго"; break;
+    case ESP_RST_TASK_WDT: text = "спрацював task watchdog — loop() або задача зависла"; break;
+    case ESP_RST_WDT: text = "спрацював інший watchdog"; break;
+    case ESP_RST_DEEPSLEEP: text = "прокидання з deep sleep"; break;
+    case ESP_RST_BROWNOUT: text = "BROWNOUT — просідання живлення (недостатньо струму від БЖ/USB, перевір проводку помпи/нагрівачів)"; break;
+    case ESP_RST_SDIO: text = "reset через SDIO"; break;
+    default: text = "невідома причина"; break;
+  }
+  Serial.printf("[BOOT] Причина рестарту: %s (код %d)\n", text, (int)reason);
+  Serial.printf("[BOOT] Вільна internal-пам'ять: %u Б | PSRAM: %u Б\n",
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram());
+}
+
 void setup() {
   Serial.begin(115200);
   delay(2000);
@@ -42,6 +69,7 @@ void setup() {
   Serial.println("\n============================================");
   Serial.println("  SMART PLANT ESP32-S3: CONTROLLER STARTUP  ");
   Serial.println("============================================");
+  logResetReason();
 
   sensors.begin();
 
@@ -154,17 +182,20 @@ void setup() {
 
 void loop() {
   // Детектор зависання: якщо якийсь виклик нижче (найімовірніше — блокуючий
-  // MQTT-reconnect до недоступного брокера) з'їв понад ~3 с, ЖОДЕН
-  // failsafe-таймер в actuators.update() цей час не працював — не лише
-  // помпин. Аварійно гасимо ВСІ актуатори негайно (emergencyStopAll), а не
-  // тільки помпу: fan/light/обидва нагрівачі — той самий millis()-таймер, що
-  // просто не встиг спрацювати вчасно. Бекенд перекомандує актуальний стан
-  // наступним тіком. Ловить будь-яку причину блокування loop(), не лише
-  // MQTT. Перша ітерація пропускається (lastLoopMs ще 0 після довгого setup()).
+  // MQTT-reconnect до недоступного/повільного брокера) з'їв понад
+  // LOOP_HANG_THRESHOLD_MS, ЖОДЕН failsafe-таймер в actuators.update() цей
+  // час не працював — не лише помпин. Аварійно гасимо ВСІ актуатори негайно
+  // (emergencyStopAll), а не тільки помпу: fan/light/обидва нагрівачі — той
+  // самий millis()-таймер, що просто не встиг спрацювати вчасно. Бекенд
+  // перекомандує актуальний стан наступним тіком. Ловить будь-яку причину
+  // блокування loop(), не лише MQTT. Перша ітерація пропускається (lastLoopMs
+  // ще 0 після довгого setup()). LOOP_HANG_THRESHOLD_MS (Config.h) навмисно
+  // узгоджений із сумою MQTT_TCP_CONNECT_TIMEOUT_S+MQTT_CONNACK_TIMEOUT_S
+  // (MqttService.cpp) — не піднімати один без перегляду іншого.
   static unsigned long lastLoopMs = 0;
   unsigned long nowMs = millis();
   unsigned long loopGap = nowMs - lastLoopMs;
-  if (lastLoopMs != 0 && loopGap > 3000) {
+  if (lastLoopMs != 0 && loopGap > LOOP_HANG_THRESHOLD_MS) {
     actuators.emergencyStopAll();
     Serial.printf("[SAFETY] loop() завис на %lu мс — усі актуатори аварійно вимкнено.\n", loopGap);
   }
@@ -201,6 +232,20 @@ void loop() {
     if (lastSensorData.soilTempValid) {
       Serial.printf("[ҐРУНТ]    Температура: %.1f °C\n", lastSensorData.soilTempC);
     }
+
+    // Тренд стабільності: падіння вільної пам'яті з часом (без відновлення)
+    // означає витік (leak) і майбутній краш; слабкий/спадаючий RSSI —
+    // ймовірну причину майбутнього WiFi-розриву (BEACON_TIMEOUT) ще до того,
+    // як він станеться.
+    static uint32_t minFreeHeap = UINT32_MAX;
+    uint32_t freeHeap = ESP.getFreeHeap();
+    if (freeHeap < minFreeHeap) {
+      minFreeHeap = freeHeap;
+    }
+    Serial.printf("[СТАН]     Uptime: %lu с | RSSI: %s | Вільна пам'ять: %u Б (мін. за сеанс: %u Б)\n",
+                  millis() / 1000,
+                  wifiUp ? (String(WiFi.RSSI()) + " dBm").c_str() : "н/д (Wi-Fi відсутній)",
+                  (unsigned)freeHeap, (unsigned)minFreeHeap);
   }
 
   if (mqttPublishTimer.elapsed()) {

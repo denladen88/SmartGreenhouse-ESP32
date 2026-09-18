@@ -8,6 +8,26 @@
 
 void (*MqttService::_commandHandler)(const CommandData&) = nullptr;
 
+namespace {
+// Коди стану PubSubClient (PubSubClient.h) — рядок, що пояснює, чому саме
+// пропало MQTT-з'єднання (не лише "щось відвалилось").
+const char* mqttStateStr(int state) {
+  switch (state) {
+    case MQTT_CONNECTION_TIMEOUT: return "тайм-аут з'єднання (брокер не відповів)";
+    case MQTT_CONNECTION_LOST: return "з'єднання втрачено (розірвано TCP-сокет)";
+    case MQTT_CONNECT_FAILED: return "не вдалось встановити TCP-з'єднання з брокером";
+    case MQTT_DISCONNECTED: return "відключено";
+    case MQTT_CONNECTED: return "підключено";
+    case MQTT_CONNECT_BAD_PROTOCOL: return "брокер відхилив версію протоколу";
+    case MQTT_CONNECT_BAD_CLIENT_ID: return "брокер відхилив client id";
+    case MQTT_CONNECT_UNAVAILABLE: return "сервер MQTT недоступний";
+    case MQTT_CONNECT_BAD_CREDENTIALS: return "невірні облікові дані MQTT";
+    case MQTT_CONNECT_UNAUTHORIZED: return "не авторизовано (перевір MQTT_USERNAME/MQTT_PASSWORD)";
+    default: return "невідомий стан";
+  }
+}
+}  // namespace
+
 MqttService::MqttService()
   : _mqttClient(_wifiClient),
     _reconnectTimer(MQTT_RECONNECT_INTERVAL_MS) {}
@@ -19,16 +39,29 @@ void MqttService::begin() {
   // телеметрія (усі валідні поля) підбирається до ~230 Б — за замовчуванням
   // publish() міг мовчки повертати false і губити зразок без ретраю.
   _mqttClient.setBufferSize(512);
-  // Стеля busy-wait CONNACK у PubSubClient::connect(): з 15 с (дефолт) до 2 с.
-  // connect() блокуючий і викликається з loop(), тож ця стеля напряму обмежує,
-  // наскільки reconnect до недоступного брокера підвішує failsafe-таймери.
-  _mqttClient.setSocketTimeout(2);
+  // Стеля busy-wait CONNACK у PubSubClient::connect(). connect() блокуючий і
+  // викликається з loop(), тож ця стеля напряму обмежує, наскільки reconnect
+  // до недоступного/повільного брокера підвішує failsafe-таймери. Значення й
+  // причина, чому саме 3с (не 2с) — див. Config.h біля MQTT_CONNACK_TIMEOUT_S:
+  // 2с виявилось замало й спричиняло reconnect-шторм навіть коли брокер живий.
+  _mqttClient.setSocketTimeout(MQTT_CONNACK_TIMEOUT_S);
   // Те саме обмеження, але для самого TCP-connect (крок ДО CONNACK): якщо
   // брокер недоступний і мовчки не відповідає (а не одразу відхиляє
   // з'єднання), сокет-connect усередині WiFiClient може висіти довше за
-  // setSocketTimeout(2) вище — той обмежує лише очікування CONNACK ПІСЛЯ
+  // MQTT_CONNACK_TIMEOUT_S вище — той обмежує лише очікування CONNACK ПІСЛЯ
   // встановленого з'єднання. setTimeout() тут обмежує сам connect().
-  _wifiClient.setTimeout(2000);
+  //
+  // ВАЖЛИВО: на відміну від більшості таймаутів у цьому проєкті,
+  // WiFiClient::setTimeout() приймає СЕКУНДИ, а не мс (сигнатура
+  // `setTimeout(uint32_t seconds)` у WiFiClient.h фреймворку) — раніше тут
+  // стояло 2000, що означало 2000 секунд (~33 хв), тобто фактично не
+  // обмежувало нічого: connect() до недоступного брокера висів, поки lwIP сам
+  // не здасться після своїх internal SYN-ретраїв (спостережено ~18с у
+  // Serial-логах — "loop() завис на 18030 мс" — і на ці 18с loop()
+  // блокувався цілком, спрацьовував детектор зависання й аварійно гасив усі
+  // актуатори). MQTT_TCP_CONNECT_TIMEOUT_S і LOOP_HANG_THRESHOLD_MS в
+  // Config.h навмисно узгоджені між собою — не міняти одне без іншого.
+  _wifiClient.setTimeout(MQTT_TCP_CONNECT_TIMEOUT_S);
   _mqttClient.setKeepAlive(15);
 }
 
@@ -91,13 +124,26 @@ void MqttService::reconnect() {
     Serial.println(" готово.");
     _mqttClient.publish(MQTT_STATUS_TOPIC, "online", true);
     _mqttClient.subscribe(MQTT_COMMANDS_TOPIC);
+    _connectedSinceMs = millis();
   } else {
-    Serial.printf(" помилка (rc=%d).\n", _mqttClient.state());
+    Serial.printf(" помилка (стан=%d: %s).\n", _mqttClient.state(), mqttStateStr(_mqttClient.state()));
   }
 }
 
 bool MqttService::update(bool wifiUp) {
-  if (!_mqttClient.connected()) {
+  bool connected = _mqttClient.connected();
+  if (!connected && _wasConnected) {
+    // Перехід підключено->відключено саме тут (а не лише коли спрацює
+    // _reconnectTimer) — і з причиною (state()), і з тим, скільки протримались:
+    // "розірвано одразу після 30с" (нестабільний роутер) виглядає геть інакше
+    // в діагностиці, ніж "розірвано після 6 годин" (щось інше).
+    Serial.printf("[MQTT] З'єднання розірвано (стан=%d: %s) після %lu мс на зв'язку.\n",
+                  _mqttClient.state(), mqttStateStr(_mqttClient.state()),
+                  millis() - _connectedSinceMs);
+  }
+  _wasConnected = connected;
+
+  if (!connected) {
     // Без Wi-Fi сокет-connect усе одно провалиться, але блокуюче: не чіпаємо
     // брокер, поки мережа не піднялась (публікація в main.cpp так само
     // захищена тим самим wifiUp). wifiUp приходить від network.update() цього

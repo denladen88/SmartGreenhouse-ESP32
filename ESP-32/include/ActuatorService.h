@@ -1,6 +1,8 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <functional>
+#include "esp_timer.h"
 
 // Керує помпою (реле), вентилятором циркуляції (реле), витяжкою (реле,
 // незалежна), grow-світлом (один діод через LED-драйвер струму, ШІМ-сигнал
@@ -46,6 +48,18 @@ public:
 private:
   void applyFanOutput(); // пише FAN_PIN = isFanOn(); викликати після зміни _fanRequested або _airHeaterPower
 
+  // Незалежне від loop() апаратне вимкнення помпи через PUMP_RUN_DURATION_MS.
+  // Причина: MqttService::reconnect() — блокуючий виклик з loop(), і його
+  // найгірший випадок (TCP-connect + очікування CONNACK) може тривати довше,
+  // ніж PUMP_MAX_RUNTIME_MS (5с) — на цей час checkFailsafe() у update()
+  // просто не встигає викликатись. esp_timer виконує callback у власній
+  // FreeRTOS-задачі (esp_timer task), незалежній від задачі loop(), тож помпа
+  // гарантовано вимкнеться вчасно навіть якщо loop() застряг у мережевому
+  // блокуючому виклику. update()/checkFailsafe() лишається як другий,
+  // резервний рівень захисту (на випадок, якщо сам таймер не зміг стартувати).
+  static void pumpFailsafeCallback(void* arg);
+  esp_timer_handle_t _pumpFailsafeTimer = nullptr;
+
   // Спільна форма для 6 практично ідентичних перевірок у update() (лише поле
   // active, таймер startMs, ліміт maxRuntimeMs, лейбл логу й "вимикач"
   // різняться) — щоб додавання нового актуатора не означало копіювати ще один
@@ -60,7 +74,7 @@ private:
   void applyClampedPwm(uint8_t requested, uint8_t maxValue, int pwmChannel,
                         unsigned long& startMs, uint8_t& stateField, const char* label);
 
-  bool _pumpOn = false;
+  std::atomic<bool> _pumpOn{false}; // читається/пишеться і з loop() (задача Arduino), і з callback'у _pumpFailsafeTimer (окрема FreeRTOS-задача esp_timer)
   bool _fanRequested = false; // останній явний setFan(); НЕ обов'язково фактичний стан піна — див. isFanOn()
   bool _exhaustFanOn = false;
   uint8_t _lightBrightness = 0;

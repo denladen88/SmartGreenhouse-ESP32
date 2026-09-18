@@ -60,4 +60,10 @@ private:
   WiFiClient _wifiClient;
   PubSubClient _mqttClient;
   NonBlockingTimer _reconnectTimer;
+
+  // Для діагностики розриву: чи були підключені на попередньому update(), і
+  // коли підключились востаннє — щоб при розриві залогувати, скільки часу
+  // з'єднання протрималось, а не лише сам факт розриву.
+  bool _wasConnected = false;
+  unsigned long _connectedSinceMs = 0;
 };
