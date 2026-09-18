@@ -65,6 +65,13 @@ public class AiAgronomistService : BackgroundService
     private readonly SemaphoreSlim _localControlGate = new(1, 1);
     private DateTime _lastLocalControlUtc = DateTime.MinValue;
 
+    // TEMPORARY STRESS TEST — set back to false when done. Forces every
+    // actuator except the pump fully on regardless of the rules below, so
+    // fans/light/heaters stay under continuous load for a burn-in test.
+    // Pump stays governed by the normal rule (never forced on) so it doesn't
+    // run unattended for the duration of the test.
+    private const bool StressTestForceActuatorsOn = true;
+
     public AiAgronomistService(
         ILogger<AiAgronomistService> logger,
         IServiceScopeFactory scopeFactory,
@@ -1009,6 +1016,19 @@ public class AiAgronomistService : BackgroundService
                 : "Air heater off, exhaust fan off -> Off";
 
         var reason = $"{exhaustFanReason}; {fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}; {airHeaterReason}";
+
+        if (StressTestForceActuatorsOn)
+        {
+            // TEMPORARY STRESS TEST override — see StressTestForceActuatorsOn.
+            // Pump is intentionally excluded: pumpOn keeps whatever the normal
+            // rule above decided (i.e. stays off unless that rule says water).
+            fanOn = true;
+            exhaustFanOn = true;
+            lightBrightness = 255;
+            soilHeaterPower = _agronomistOptions.SoilHeaterMaxPower;
+            airHeaterPower = _agronomistOptions.AirHeaterMaxPower;
+            reason = $"[STRESS TEST: all actuators forced on except pump] {reason}";
+        }
 
         var decisionRecord = new AiDecisionRecord
         {

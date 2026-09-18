@@ -228,13 +228,15 @@ constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;
 // PubSubClient::connect() здававсь чекати CONNACK і сам рвав з'єднання. 2с
 // виявилось замало для гарантованого приходу CONNACK через це докерне
 // MQTT-мереживо, і це створювало зайвий reconnect-шторм замість того, щоб
-// просто почекати трохи довше. MQTT_TCP_CONNECT_TIMEOUT_S лишили 2с —
-// TCP-connect на локальній мережі в логах завжди встигав за частки секунди,
-// ця стеля майже ніколи не вичерпується.
-constexpr uint16_t MQTT_TCP_CONNECT_TIMEOUT_S = 2;
+// просто почекати трохи довше. MQTT_TCP_CONNECT_TIMEOUT_S піднято з 2с до 5с:
+// у Serial-логах "select returned due to timeout 2000 ms" + стан=-2
+// (MQTT_CONNECT_FAILED) повторювалось щоразу — 2с не вистачало навіть на сам
+// TCP-connect (а не лише на CONNACK після нього), тож reconnect() гарантовано
+// провалювався щотика.
+constexpr uint16_t MQTT_TCP_CONNECT_TIMEOUT_S = 5;
 constexpr uint16_t MQTT_CONNACK_TIMEOUT_S = 5;
 
-// (2+5)с = 7с гіршого випадку однієї спроби reconnect(); 8с лишає запас під
+// (5+5)с = 10с гіршого випадку однієї спроби reconnect(); 11с лишає запас під
 // це, залишаючись досить чутливим до інших причин реального зависання loop()
 // (детектор — не лише про MQTT, див. коментар біля нього в main.cpp).
-constexpr unsigned long LOOP_HANG_THRESHOLD_MS = 8000;
+constexpr unsigned long LOOP_HANG_THRESHOLD_MS = 11000;

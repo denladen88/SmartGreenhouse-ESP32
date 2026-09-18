@@ -59,8 +59,11 @@ void MqttService::begin() {
   // не здасться після своїх internal SYN-ретраїв (спостережено ~18с у
   // Serial-логах — "loop() завис на 18030 мс" — і на ці 18с loop()
   // блокувався цілком, спрацьовував детектор зависання й аварійно гасив усі
-  // актуатори). MQTT_TCP_CONNECT_TIMEOUT_S і LOOP_HANG_THRESHOLD_MS в
-  // Config.h навмисно узгоджені між собою — не міняти одне без іншого.
+  // актуатори). Далі стояло 2с — і це вже виявилось замало в інший бік:
+  // постійні "select returned due to timeout 2000 ms" + стан=-2, тобто сам
+  // TCP-connect не встигав за 2с — тож піднято до 5с. MQTT_TCP_CONNECT_TIMEOUT_S
+  // і LOOP_HANG_THRESHOLD_MS в Config.h навмисно узгоджені між собою — не
+  // міняти одне без іншого.
   _wifiClient.setTimeout(MQTT_TCP_CONNECT_TIMEOUT_S);
   _mqttClient.setKeepAlive(15);
 }
