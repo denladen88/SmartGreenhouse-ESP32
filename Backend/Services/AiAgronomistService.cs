@@ -70,7 +70,7 @@ public class AiAgronomistService : BackgroundService
     // fans/light/heaters stay under continuous load for a burn-in test.
     // Pump stays governed by the normal rule (never forced on) so it doesn't
     // run unattended for the duration of the test.
-    private const bool StressTestForceActuatorsOn = true;
+    private const bool StressTestForceActuatorsOn = false;
 
     public AiAgronomistService(
         ILogger<AiAgronomistService> logger,
