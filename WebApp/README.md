@@ -20,7 +20,9 @@ npm run build     # production build -> dist/
 There is no separate hosting. `npm run build` output (`dist/`) is copied into
 `../Backend/wwwroot/`, which `../Backend/Program.cs` serves via `UseStaticFiles()`
 + `MapFallbackToFile("index.html")` — so in normal use there is one process and one
-URL (`http://<backend-host>:5080/`). When served from `wwwroot`, the Backend URL
+URL. The current home-server deployment is available at
+`http://192.168.178.50:8080/`. Port `5080` is used for local development. When
+served from `wwwroot`, the Backend URL
 defaults to `window.location.origin`; the dev server needs it entered manually in
 Settings.
 

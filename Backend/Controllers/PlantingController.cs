@@ -11,10 +11,10 @@ namespace SmartGreenhouse.Backend.Controllers;
 // підставляються прямо в промпт до Gemini (AiAgronomistService) — довший
 // текст, у якому легше заховати спробу маніпуляції відповіддю LLM.
 public record PlantingRequest(
-    [property: MaxLength(100)] string PlantName,
-    [property: MaxLength(100)] string SoilType,
+    [param: MaxLength(100)] string PlantName,
+    [param: MaxLength(100)] string SoilType,
     DateTime PlantedDateUtc,
-    [property: MaxLength(2000)] string? Notes);
+    [param: MaxLength(2000)] string? Notes);
 
 // Онбординг нової посадки — замінює правку appsettings.json:Plant + перезапуск
 // Backend на POST з мобільного застосунку. Див. розділ "Ініціалізація нової

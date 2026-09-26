@@ -17,7 +17,7 @@ npx tsc -b               # type-check
 npm run build             # production build -> dist/
 ```
 
-**Deployment is unusual**: there's no separate hosting for this app. `npm run build` output (`dist/`) is meant to be copied into `../Backend/wwwroot/`, which `../Backend/Program.cs` serves directly (`UseStaticFiles()` + `MapFallbackToFile("index.html")`) — so in normal use there's one process (Backend) and one URL (`http://<backend-host>:5080/`), not two. The dev server (`npm run dev`) is only for iterating on this app's code; it talks to a separately-running Backend over CORS (`AddCors`/`UseCors` in `Program.cs`, `AllowAnyOrigin` since auth is a header, not a cookie).
+**Deployment is unusual**: there's no separate hosting for this app. `npm run build` output (`dist/`) is meant to be copied into `../Backend/wwwroot/`, which `../Backend/Program.cs` serves directly (`UseStaticFiles()` + `MapFallbackToFile("index.html")`) — so in normal use there's one process (Backend) and one URL, not two. The current home-server URL is `http://192.168.178.50:8080/`; port `5080` is used for local development. The dev server (`npm run dev`) is only for iterating on this app's code; it talks to a separately-running Backend over CORS (`AddCors`/`UseCors` in `Program.cs`, `AllowAnyOrigin` since auth is a header, not a cookie).
 
 `../Backend/SmartGreenhouse.Backend.csproj` has an explicit `<Content Update="wwwroot/**/*" CopyToOutputDirectory="PreserveNewest" />` — without it, `Microsoft.NET.Sdk.Web`'s default only copies `wwwroot/` on `dotnet publish`, not on `dotnet build`/`dotnet run`, and Backend's `ContentRootPath` is pinned to the build output dir (`AppContext.BaseDirectory`), not the source tree.
 
