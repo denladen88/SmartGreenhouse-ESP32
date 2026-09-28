@@ -8,13 +8,10 @@ public class AiAgronomistOptions
     // (AiAgronomistService.RunLocalControlAsync), не AI.
     public int DailyAnalysisHour { get; set; } = 12;
 
-    // Плановий огляд НЕ виконується без свіжого фото. Якщо о DailyAnalysisHour
-    // камера не віддала кадр (офлайн / затемно), пробуємо ще раз кожні
-    // PhotoRetryIntervalMinutes, поки від старту огляду не мине
-    // PhotoRetryWindowMinutes — після чого цей день пропускається (профіль
-    // лишається без змін). Для запуску о 12:00 вікно 120 хв = "до 14:00".
-    public int PhotoRetryIntervalMinutes { get; set; } = 15;
-    public int PhotoRetryWindowMinutes { get; set; } = 120;
+    // Якщо щоденний AI-огляд не завершився успішним записом профілю (немає
+    // телеметрії, Gemini/БД тимчасово недоступні або відповідь невалідна),
+    // повторювати спробу з цим інтервалом до успіху.
+    public int DailyAnalysisRetryMinutes { get; set; } = 15;
 
     public int TrendWindowMinutes { get; set; } = 1440;
     public int TrendBucketMinutes { get; set; } = 60;

@@ -49,6 +49,10 @@ Also serves `../WebApp` (React/Vite web control panel): `UseStaticFiles()` + `Ma
 
 - **Models/** — plain POJOs/records split between MQTT wire types (`TelemetryMessage`, `AiCommand` — `JsonPropertyName`-annotated snake_case to match the ESP-32/MQTT side), the EF entities (`TelemetryRecord`, `AiDecisionRecord`, `PlantProfile`, `Planting`), the Gemini response DTOs (nested private records inside `AiAgronomistService`), and the `*Options` config-binding classes described above.
 
+> **Photo behavior update:** photos are now optional for every profile review. The service attempts one capture; if no usable image is available, Gemini still reviews telemetry, actuator history, and planting context immediately. The older photo-retry/skip description above is obsolete.
+
+> **Daily-review reliability update:** after `DailyAnalysisHour`, a failed scheduled AI review is retried every `DailyAnalysisRetryMinutes` until the profile is successfully saved. Missing telemetry, Gemini/JSON failures, and database failures therefore no longer consume the day's single attempt. Only a profile whose `LastUpdateReason` is `Scheduled daily review` counts as that day's completed AI review; manual edits and bootstrap profiles do not.
+
 **Cross-project notes**:
 - The ESP-32 firmware (`MqttService`, wired up in its `main.cpp`) subscribes to `MQTT_COMMANDS_TOPIC` and applies `pump_on`/`fan_on`/etc. directly to `ActuatorService`, so both `AiAgronomistService`'s and `CommandsController`'s published commands on `smartplant/commands` reach the device the same way. The pump still has an independent 5s failsafe timeout on the firmware side regardless of command source.
 - `../MobileApp` (React Native/Expo, TypeScript) and `../WebApp` (React/Vite, TypeScript) are the two HTTP/SignalR clients for everything in `Controllers/`+`Hubs/` above — see their own CLAUDE.md for the client-side architecture (deliberately near-identical between the two). Both are LAN-only by design (no JWT/OAuth, no public HTTPS), matching the single shared `Api:Key`.

@@ -22,10 +22,6 @@ public class AiAgronomistService : BackgroundService
     private static readonly JsonSerializerOptions DecisionJsonOptions = new() { PropertyNameCaseInsensitive = true };
     public const string PhotosDirectory = "Photos";
 
-    // Плановий (щоденний) огляд вимагає свіжого фото; bootstrap для нової рослини
-    // — ні (краще профіль на самих сенсорах, ніж бездіяльні актуатори до полудня).
-    private enum ProfileReviewKind { ScheduledDaily, Bootstrap }
-
     // Скільки послідовних не-null точок треба, щоб довіряти "стійкому" тренду в
     // локальних правилах (вентилятор, помпа, просушка ґрунту) — одна точка може
     // бути шумом, кілька поспіль — уже сигнал.
@@ -50,13 +46,6 @@ public class AiAgronomistService : BackgroundService
     private readonly HttpClient _cameraHttpClient;  // ESP32-CAM (15с — щоб мертва камера не тримала слот 45с)
     private readonly IHubContext<TelemetryHub> _hub;
     private readonly TelemetrySignal _telemetrySignal;
-
-    // Локальна дата, коли востаннє СТАРТУВАВ плановий (ScheduledDaily) огляд —
-    // байдуже, чи він дописав профіль. Гасить тісний повторний прогін, коли
-    // плановий огляд завершився без фото і нічого не записав (інакше цикл одразу
-    // побачив би "після полудня, сьогодні ще не було" і запустився знову).
-    // Належить виключно RunProfileSupervisionLoopAsync.
-    private DateOnly? _lastScheduledAttemptLocalDate;
 
     // Локальний контролер тепер будиться з двох джерел — fallback-таймера і
     // сигналу про нову телеметрію. Семафор серіалізує їх (один тік за раз), а
@@ -120,10 +109,10 @@ public class AiAgronomistService : BackgroundService
             return;
         }
 
-        await RunProfileAnalysisSafeAsync(ct, ProfileReviewKind.Bootstrap, $"Initial profile: {reason}");
+        await RunProfileAnalysisSafeAsync(ct, $"Initial profile: {reason}");
     }
 
-    // ---- Профіль: рівно раз на добу о DailyAnalysisHour Gemini переглядає все і переписує PlantProfile ----
+    // ---- Профіль: щодня після DailyAnalysisHour Gemini переглядає все і переписує PlantProfile ----
 
     private async Task RunProfileSupervisionLoopAsync(CancellationToken stoppingToken)
     {
@@ -135,35 +124,33 @@ public class AiAgronomistService : BackgroundService
             // вимагаємо.
             if (!await HasProfileForCurrentPlantAsync(stoppingToken))
             {
-                await RunProfileAnalysisSafeAsync(stoppingToken, ProfileReviewKind.Bootstrap,
+                await RunProfileAnalysisSafeAsync(stoppingToken,
                     "Initial profile (no profile on startup)");
             }
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                // "Навздогін": бекенд підняли вже після DailyAnalysisHour, а
-                // сьогоднішній плановий огляд ще не стартував у цьому процесі
-                // (_lastScheduledAttemptLocalDate) і профіль сьогодні після
-                // полудня не оновлювався (перевірка в БД — переживає рестарт).
-                // Тоді не чекаємо повну добу до наступного полудня.
-                var today = DateOnly.FromDateTime(DateTime.Now);
                 var noonPassed = DateTime.Now.Hour >= _agronomistOptions.DailyAnalysisHour;
-                var catchUp = noonPassed
-                    && _lastScheduledAttemptLocalDate != today
-                    && !await AlreadyReviewedSinceTodayNoonAsync(stoppingToken);
+                var reviewedToday = noonPassed && await AlreadyAiReviewedSinceTodayNoonAsync(stoppingToken);
 
-                if (!catchUp)
+                if (!noonPassed || reviewedToday)
                 {
                     await Task.Delay(TimeUntilNextNoon(), stoppingToken);
+                    continue;
                 }
 
-                if (stoppingToken.IsCancellationRequested)
+                // Після планового часу повторюємо до успішного запису профілю.
+                // Це покриває тимчасову відсутність телеметрії, помилки Gemini,
+                // невалідний JSON і помилки БД. Фото для успіху не потрібне.
+                var succeeded = await RunProfileAnalysisSafeAsync(stoppingToken, "Scheduled daily review");
+                if (!succeeded)
                 {
-                    break;
+                    var retryMinutes = Math.Max(1, _agronomistOptions.DailyAnalysisRetryMinutes);
+                    _logger.LogWarning(
+                        "Scheduled daily AI review did not complete — retrying in {RetryMinutes} minutes",
+                        retryMinutes);
+                    await Task.Delay(TimeSpan.FromMinutes(retryMinutes), stoppingToken);
                 }
-
-                _lastScheduledAttemptLocalDate = DateOnly.FromDateTime(DateTime.Now);
-                await RunProfileAnalysisSafeAsync(stoppingToken, ProfileReviewKind.ScheduledDaily, "Scheduled daily review");
             }
         }
         catch (OperationCanceledException)
@@ -191,33 +178,35 @@ public class AiAgronomistService : BackgroundService
         return await db.PlantProfiles.AnyAsync(p => p.PlantName == plantName, ct);
     }
 
-    // Чи профіль поточної рослини вже оновлювався сьогодні після DailyAnalysisHour
-    // — тобто плановий огляд (або ручна правка через застосунок) цього дня вже
-    // стався. Переживає рестарт бекенду, на відміну від
-    // _lastScheduledAttemptLocalDate.
-    private async Task<bool> AlreadyReviewedSinceTodayNoonAsync(CancellationToken ct)
+    // Чи саме AI-плановий огляд (не ручна правка і не bootstrap) вже успішно
+    // записав профіль сьогодні після DailyAnalysisHour. Переживає рестарт.
+    private async Task<bool> AlreadyAiReviewedSinceTodayNoonAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var plantName = ResolvePlantName(await GetCurrentPlantingAsync(db, ct));
         var todayNoonUtc = DateTime.Now.Date.AddHours(_agronomistOptions.DailyAnalysisHour).ToUniversalTime();
         var lastUpdatedUtc = await db.PlantProfiles
-            .Where(p => p.PlantName == plantName)
+            .Where(p => p.PlantName == plantName && p.LastUpdateReason == "Scheduled daily review")
             .Select(p => (DateTime?)p.LastUpdatedUtc)
             .FirstOrDefaultAsync(ct);
         return lastUpdatedUtc is { } u && u >= todayNoonUtc;
     }
 
-    private async Task RunProfileAnalysisSafeAsync(
-        CancellationToken stoppingToken, ProfileReviewKind kind, string lastUpdateReason)
+    private async Task<bool> RunProfileAnalysisSafeAsync(CancellationToken stoppingToken, string lastUpdateReason)
     {
         try
         {
-            await RunProfileAnalysisAsync(stoppingToken, kind, lastUpdateReason);
+            return await RunProfileAnalysisAsync(stoppingToken, lastUpdateReason);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "AI Agronomist profile analysis failed");
+            return false;
         }
     }
 
@@ -304,10 +293,8 @@ public class AiAgronomistService : BackgroundService
         return imageBytes;
     }
 
-    private async Task RunProfileAnalysisAsync(
-        CancellationToken stoppingToken, ProfileReviewKind kind, string lastUpdateReason)
+    private async Task<bool> RunProfileAnalysisAsync(CancellationToken stoppingToken, string lastUpdateReason)
     {
-        var requirePhoto = kind == ProfileReviewKind.ScheduledDaily;
         var trendWindow = TimeSpan.FromMinutes(_agronomistOptions.TrendWindowMinutes);
         var trendBucket = TimeSpan.FromMinutes(_agronomistOptions.TrendBucketMinutes);
         var windowStart = DateTime.UtcNow - trendWindow;
@@ -337,7 +324,7 @@ public class AiAgronomistService : BackgroundService
         if (recentRecords.Count == 0)
         {
             _logger.LogInformation("No telemetry recorded in the last {Window}, skipping profile analysis", trendWindow);
-            return;
+            return false;
         }
 
         var trend = DownsampleTrend(recentRecords, trendBucket);
@@ -366,30 +353,9 @@ public class AiAgronomistService : BackgroundService
             "Trend for this profile analysis: {PointCount} points over the last {Window}:\n{TrendText}",
             trend.Count, trendWindow, trendText);
 
-        // Плановий (щоденний) огляд не виконується без свіжого фото: якщо камера
-        // недоступна / затемно, добираємо кадр кожні PhotoRetryIntervalMinutes,
-        // поки від старту огляду не мине PhotoRetryWindowMinutes, після чого цей
-        // день пропускаємо (профіль лишається без змін). Bootstrap фото не
-        // вимагає — краще профіль на самих сенсорах, ніж бездіяльні актуатори.
-        var photoDeadlineUtc = DateTime.UtcNow + TimeSpan.FromMinutes(_agronomistOptions.PhotoRetryWindowMinutes);
+        // Фото покращує оцінку стадії росту, але не є обов'язковим: недоступна
+        // камера не повинна блокувати щоденне оновлення профілю за телеметрією.
         var imageBytes = await TryCapturePhotoAsync(stoppingToken);
-        while (imageBytes is null && requirePhoto && DateTime.UtcNow < photoDeadlineUtc)
-        {
-            _logger.LogInformation(
-                "Scheduled review needs a photo but none available yet — retrying in {Interval} min",
-                _agronomistOptions.PhotoRetryIntervalMinutes);
-            await Task.Delay(TimeSpan.FromMinutes(_agronomistOptions.PhotoRetryIntervalMinutes), stoppingToken);
-            imageBytes = await TryCapturePhotoAsync(stoppingToken);
-        }
-
-        if (imageBytes is null && requirePhoto)
-        {
-            _logger.LogWarning(
-                "No photo from ESP32 camera within {Window} min of the scheduled review — skipping today's profile " +
-                "analysis, profile left unchanged", _agronomistOptions.PhotoRetryWindowMinutes);
-            return;
-        }
-
         var hasPhoto = imageBytes is { Length: > 0 };
         var base64Image = hasPhoto ? Convert.ToBase64String(imageBytes!) : null;
 
@@ -490,14 +456,14 @@ public class AiAgronomistService : BackgroundService
         var text = await CallGeminiAsync(requestBody, stoppingToken);
         if (text is null)
         {
-            return;
+            return false;
         }
 
         var analysis = JsonSerializer.Deserialize<PlantProfileAnalysisResponse>(StripMarkdownFence(text), DecisionJsonOptions);
         if (analysis is null)
         {
             _logger.LogWarning("Failed to parse PlantProfile analysis response: {Text}", text);
-            return;
+            return false;
         }
 
         // Захист від некоректної/маніпульованої відповіді: навіть у межах min<max
@@ -568,10 +534,12 @@ public class AiAgronomistService : BackgroundService
 
             await db.SaveChangesAsync(stoppingToken);
             await _hub.Clients.All.SendAsync("PlantProfileReceived", tracked, stoppingToken);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to save PlantProfile");
+            return false;
         }
     }
 
