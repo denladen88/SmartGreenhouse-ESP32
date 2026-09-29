@@ -56,7 +56,7 @@ public class AiAgronomistOptions
     // Наскільки нижче PlantProfile.SoilTempMinC (у °C) має впасти ґрунт, щоб
     // локальне правило підігріву вивело нагрівач на повну потужність (255) —
     // між 0 і цим дефіцитом потужність зростає пропорційно, не різким on/off.
-    public double SoilHeaterFullPowerDeficitC { get; set; } = 5.0;
+    public double SoilHeaterFullPowerDeficitC { get; set; } = 4.0;
 
     // Тимчасова апаратна стеля потужності ґрунтового нагрівача (0..255) для
     // локального контролера. 255 = без обмеження. Аналог AirHeaterMaxPower —
@@ -88,7 +88,7 @@ public class AiAgronomistOptions
     // локальне правило підігріву вивело повітряний нагрівач на повну потужність
     // (255) — між 0 і цим дефіцитом потужність зростає пропорційно, не різким
     // on/off. Аналог SoilHeaterFullPowerDeficitC для ґрунтового.
-    public double AirHeaterFullPowerDeficitC { get; set; } = 5.0;
+    public double AirHeaterFullPowerDeficitC { get; set; } = 4.0;
 
     // Тимчасова апаратна стеля потужності повітряного нагрівача (0..255) для
     // локального контролера. 255 = без обмеження. Тримаємо нижче, поки нагрівач і
