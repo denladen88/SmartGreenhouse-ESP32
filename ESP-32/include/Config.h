@@ -162,7 +162,7 @@ constexpr unsigned long LIGHT_MAX_RUNTIME_MS = 900000;
 // на цей час, а вимиканням керує сама прошивка (ActuatorService::update()
 // щоцикл loop()) — бекенду достатньо надіслати pump_on:true, окрема команда
 // "вимкнути" не потрібна. МАЄ лишатися меншим за PUMP_MAX_RUNTIME_MS.
-constexpr unsigned long PUMP_RUN_DURATION_MS = 1000;
+constexpr unsigned long PUMP_RUN_DURATION_MS = 3000;
 
 // Аварійний ліміт (backstop): якщо штатне вимкнення вище чомусь не спрацювало
 // (баг у логіці, "залипання" реле, зависання команди) — помпа примусово

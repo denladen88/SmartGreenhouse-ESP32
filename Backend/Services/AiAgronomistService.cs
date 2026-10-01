@@ -766,8 +766,14 @@ public class AiAgronomistService : BackgroundService
 
         // Помпа: вологість спадає і вже нижче мінімуму, плюс не поливали нещодавно
         // (запобіжник від кореневої гнилі базиліка — див. Plant:CareNotes).
+        // Окремий аварійний випадок — щонайменше два останні валідні показники
+        // дорівнюють 0%: нижче значення вже фізично не може впасти, тому вимога
+        // спадного тренду назавжди заблокувала б полив повністю сухого ґрунту.
+        // Cooldown нижче однаково діє і для цього випадку.
         var soilDeclining = soilPoints.Count >= MinSustainedReadings && soilPoints[0] - soilPoints[^1] > 1.0;
         var soilBelowMin = soilPoints.Count > 0 && soilPoints[^1] < profile.SoilMoistureMinPct;
+        var soilPersistentlyAtZero = soilPoints.Count >= MinSustainedReadings &&
+            soilPoints.TakeLast(MinSustainedReadings).All(p => p <= 0.0);
 
         var lastWateringUtc = await db.AiDecisions
             .Where(d => d.PumpOn)
@@ -777,16 +783,19 @@ public class AiAgronomistService : BackgroundService
         var wateringCooldownElapsed = lastWateringUtc is null ||
             DateTime.UtcNow - lastWateringUtc.Value >= TimeSpan.FromMinutes(_agronomistOptions.MinMinutesBetweenWaterings);
 
-        var pumpOn = soilBelowMin && soilDeclining && wateringCooldownElapsed;
+        var hasWateringDemand = soilBelowMin && (soilDeclining || soilPersistentlyAtZero);
+        var pumpOn = hasWateringDemand && wateringCooldownElapsed;
         var pumpReason = !soilBelowMin
             ? $"SoilMoisture {(soilPoints.Count > 0 ? soilPoints[^1].ToString("0.#") : "N/A")}% >= min " +
               $"{profile.SoilMoistureMinPct:0.#}% -> Off"
-            : !soilDeclining
+            : !soilDeclining && !soilPersistentlyAtZero
                 ? "SoilMoisture low but not declining over window -> Off"
                 : !wateringCooldownElapsed
-                    ? $"SoilMoisture low and declining but watered within last {_agronomistOptions.MinMinutesBetweenWaterings}" +
+                    ? $"SoilMoisture requires watering but watered within last {_agronomistOptions.MinMinutesBetweenWaterings}" +
                       "min -> Off (cooldown)"
-                    : $"SoilMoisture {soilPoints[^1]:0.#}% < min {profile.SoilMoistureMinPct:0.#}% and declining -> On";
+                    : soilPersistentlyAtZero
+                        ? $"SoilMoisture stayed at 0% for the last {MinSustainedReadings} valid readings -> On"
+                        : $"SoilMoisture {soilPoints[^1]:0.#}% < min {profile.SoilMoistureMinPct:0.#}% and declining -> On";
 
         // Світло: рахуємо ГОДИНИ, коли рослина реально отримувала світло — і від
         // сонця (ambient Lux >= порогу), і від самого grow light (коли він був
