@@ -185,6 +185,9 @@ export function DashboardScreen() {
             Ґрунт: {profile.soilMoistureMinPct.toFixed(0)}–{profile.soilMoistureMaxPct.toFixed(0)}% · Світло:{' '}
             {profile.dailyLightHoursTarget.toFixed(1)}г/добу
           </Text>
+          <Text style={styles.profileLine}>
+            Температура ґрунту: {profile.soilTempMinC.toFixed(1)}–{profile.soilTempMaxC.toFixed(1)}°C
+          </Text>
           <Text style={styles.profileNotes}>{profile.notes}</Text>
         </View>
       )}
