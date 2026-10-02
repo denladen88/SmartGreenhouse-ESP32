@@ -39,6 +39,7 @@
 			"**/.expo": true,
 			"**/dist": true,
 			"Backend/wwwroot": true
-		}
+		},
+		"dotnet.defaultSolution": "SmartGreenhouse-Learn/SmartGreenhouse.sln"
 	}
 }

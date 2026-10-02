@@ -88,7 +88,7 @@ public class AiAgronomistOptions
     // локальне правило підігріву вивело повітряний нагрівач на повну потужність
     // (255) — між 0 і цим дефіцитом потужність зростає пропорційно, не різким
     // on/off. Аналог SoilHeaterFullPowerDeficitC для ґрунтового.
-    public double AirHeaterFullPowerDeficitC { get; set; } = 4.0;
+    public double AirHeaterFullPowerDeficitC { get; set; } = 1.0;
 
     // Тимчасова апаратна стеля потужності повітряного нагрівача (0..255) для
     // локального контролера. 255 = без обмеження. Тримаємо нижче, поки нагрівач і
