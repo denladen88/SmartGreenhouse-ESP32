@@ -49,6 +49,14 @@ public class PlantProfile
     public string GrowthStage { get; set; } = string.Empty;
 
     public string Notes { get; set; } = string.Empty;
+
+    // Аудит останнього звернення до Gemini. Prompt зберігається без JPEG-байтів:
+    // ознака вкладеного фото йде окремо, щоб API/клієнти не тягнули base64.
+    public string LastAiPrompt { get; set; } = string.Empty;
+    public string LastAiResponse { get; set; } = string.Empty;
+    public bool LastAiHadPhoto { get; set; }
+    public DateTime? LastAiReviewedUtc { get; set; }
+
     public DateTime LastUpdatedUtc { get; set; } = DateTime.UtcNow;
     public string LastUpdateReason { get; set; } = string.Empty;
 }

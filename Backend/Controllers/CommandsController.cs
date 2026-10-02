@@ -78,7 +78,14 @@ public class CommandsController : ControllerBase
             LightBrightness = command.LightBrightness,
             SoilHeaterPower = command.SoilHeaterPower,
             AirHeaterPower = command.AirHeaterPower,
-            Reason = "Manual override via mobile app",
+            Source = "ManualOverride",
+            PumpReason = "Стан встановлено вручну з екрана керування.",
+            FanReason = "Стан встановлено вручну з екрана керування.",
+            ExhaustFanReason = "Стан встановлено вручну з екрана керування.",
+            LightReason = "Яскравість встановлено вручну з екрана керування.",
+            SoilHeaterReason = "Потужність встановлено вручну з екрана керування.",
+            AirHeaterReason = "Потужність встановлено вручну з екрана керування.",
+            Reason = "Ручне керування із застосунку. Наступний цикл автоматики знову застосує правила.",
             PhotoDescription = string.Empty,
             PhotoFileName = null
         };

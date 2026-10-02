@@ -25,6 +25,13 @@ export interface AiDecisionRecord {
   lightBrightness: number;
   soilHeaterPower: number;
   airHeaterPower: number;
+  source: 'LocalController' | 'ManualOverride' | 'StressTest' | string;
+  pumpReason: string;
+  fanReason: string;
+  exhaustFanReason: string;
+  lightReason: string;
+  soilHeaterReason: string;
+  airHeaterReason: string;
   reason: string;
   photoDescription: string;
 }
@@ -52,8 +59,27 @@ export interface PlantProfile {
   dailyLightHoursTarget: number;
   growthStage: string;
   notes: string;
+  lastAiPrompt: string;
+  lastAiResponse: string;
+  lastAiHadPhoto: boolean;
+  lastAiReviewedUtc: string | null;
   lastUpdatedUtc: string;
   lastUpdateReason: string;
+}
+
+export interface AutomationRule {
+  id: string;
+  actuator: string;
+  purpose: string;
+  trigger: string;
+  stop: string;
+  safety: string;
+}
+
+export interface AutomationOverview {
+  controller: string;
+  evaluation: string;
+  rules: AutomationRule[];
 }
 
 export interface Planting {

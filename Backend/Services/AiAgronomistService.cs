@@ -439,7 +439,8 @@ public class AiAgronomistService : BackgroundService
             "\"SoilMoistureMaxPct\": number, \"SoilTempMinC\": number, \"SoilTempMaxC\": number, " +
             "\"DailyLightHoursTarget\": number, \"GrowthStage\": \"current growth stage plus a few words on how you can " +
             "tell\", \"Notes\": \"short rationale, referencing what changed since last time if applicable\" } without " +
-            "markdown code blocks.";
+            "markdown code blocks. Write the GrowthStage and Notes values in Ukrainian so they can be shown directly " +
+            "to the grower.";
 
         var parts = new List<object> { new { text = prompt } };
         if (hasPhoto)
@@ -529,6 +530,10 @@ public class AiAgronomistService : BackgroundService
             tracked.DailyLightHoursTarget = dailyLightHoursTarget;
             tracked.GrowthStage = analysis.GrowthStage ?? string.Empty;
             tracked.Notes = analysis.Notes;
+            tracked.LastAiPrompt = prompt;
+            tracked.LastAiResponse = text;
+            tracked.LastAiHadPhoto = hasPhoto;
+            tracked.LastAiReviewedUtc = DateTime.UtcNow;
             tracked.LastUpdatedUtc = DateTime.UtcNow;
             tracked.LastUpdateReason = lastUpdateReason;
 
@@ -747,21 +752,21 @@ public class AiAgronomistService : BackgroundService
         if (tempSustainedHigh)
         {
             exhaustFanOn = true;
-            exhaustFanReason = $"Temp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C > max " +
-                $"{profile.TempMaxC:0.#}C ({recentTemps.Count} readings) -> On (cooling)";
+            exhaustFanReason = $"Температури {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}°C вищі за " +
+                $"максимум {profile.TempMaxC:0.#}°C ({recentTemps.Count} заміри) — увімкнено охолодження.";
         }
         else if (exhaustFanWasOn && latestTemp is { } stillWarm && stillWarm > exhaustFanReleaseTempC)
         {
             exhaustFanOn = true;
-            exhaustFanReason = $"Temp {stillWarm:0.#}C still above release {exhaustFanReleaseTempC:0.#}C " +
-                $"(max {profile.TempMaxC:0.#}C - hysteresis {_agronomistOptions.ExhaustFanHysteresisC:0.#}C) -> On (cooling)";
+            exhaustFanReason = $"Температура {stillWarm:0.#}°C ще вища за поріг вимкнення " +
+                $"{exhaustFanReleaseTempC:0.#}°C — витяжка продовжує охолодження з гістерезисом.";
         }
         else
         {
             exhaustFanOn = false;
             exhaustFanReason = latestTemp is { } coolEnough
-                ? $"Temp {coolEnough:0.#}C <= release {exhaustFanReleaseTempC:0.#}C (max {profile.TempMaxC:0.#}C) -> Off"
-                : "No air temperature readings -> Off";
+                ? $"Температура {coolEnough:0.#}°C не вища за поріг запуску/утримання — витяжка вимкнена."
+                : "Немає показників температури повітря — витяжка вимкнена.";
         }
 
         // Помпа: вологість спадає і вже нижче мінімуму, плюс не поливали нещодавно
@@ -786,16 +791,15 @@ public class AiAgronomistService : BackgroundService
         var hasWateringDemand = soilBelowMin && (soilDeclining || soilPersistentlyAtZero);
         var pumpOn = hasWateringDemand && wateringCooldownElapsed;
         var pumpReason = !soilBelowMin
-            ? $"SoilMoisture {(soilPoints.Count > 0 ? soilPoints[^1].ToString("0.#") : "N/A")}% >= min " +
-              $"{profile.SoilMoistureMinPct:0.#}% -> Off"
+            ? $"Вологість ґрунту {(soilPoints.Count > 0 ? soilPoints[^1].ToString("0.#") : "N/A")}% не нижча за " +
+              $"мінімум {profile.SoilMoistureMinPct:0.#}% — полив не потрібен."
             : !soilDeclining && !soilPersistentlyAtZero
-                ? "SoilMoisture low but not declining over window -> Off"
+                ? $"Вологість нижча за норму, але не падає протягом {_agronomistOptions.SoilMoistureTrendWindowMinutes} хв — очікуємо."
                 : !wateringCooldownElapsed
-                    ? $"SoilMoisture requires watering but watered within last {_agronomistOptions.MinMinutesBetweenWaterings}" +
-                      "min -> Off (cooldown)"
+                    ? $"Полив потрібен, але після попереднього ще не минуло {_agronomistOptions.MinMinutesBetweenWaterings} хв — пауза безпеки."
                     : soilPersistentlyAtZero
-                        ? $"SoilMoisture stayed at 0% for the last {MinSustainedReadings} valid readings -> On"
-                        : $"SoilMoisture {soilPoints[^1]:0.#}% < min {profile.SoilMoistureMinPct:0.#}% and declining -> On";
+                        ? $"Останні {MinSustainedReadings} валідні показники дорівнюють 0% — увімкнено полив."
+                        : $"Вологість {soilPoints[^1]:0.#}% нижча за {profile.SoilMoistureMinPct:0.#}% і продовжує падати — увімкнено полив.";
 
         // Світло: рахуємо ГОДИНИ, коли рослина реально отримувала світло — і від
         // сонця (ambient Lux >= порогу), і від самого grow light (коли він був
@@ -818,24 +822,24 @@ public class AiAgronomistService : BackgroundService
         if (isNightRest)
         {
             lightBrightness = 0;
-            lightReason = $"Night rest period ({_agronomistOptions.NightRestStartHour}-{_agronomistOptions.NightRestEndHour}) -> Off";
+            lightReason = $"Нічний відпочинок {_agronomistOptions.NightRestStartHour:00}:00–{_agronomistOptions.NightRestEndHour:00}:00 — світло вимкнене.";
         }
         else if (lightHoursSoFarToday >= profile.DailyLightHoursTarget)
         {
             lightBrightness = 0;
-            lightReason = $"Daily light target already met ({lightHoursSoFarToday:0.#}h/{profile.DailyLightHoursTarget:0.#}h) -> Off";
+            lightReason = $"Денну норму світла вже набрано: {lightHoursSoFarToday:0.#}/{profile.DailyLightHoursTarget:0.#} год — світло вимкнене.";
         }
         else if (ambientLux >= _agronomistOptions.GrowthLuxThreshold)
         {
             lightBrightness = 0;
-            lightReason = $"Ambient {ambientLux:0}lx >= {_agronomistOptions.GrowthLuxThreshold:0}lx threshold, sufficient -> Off";
+            lightReason = $"Природного світла достатньо: {ambientLux:0} lx ≥ {_agronomistOptions.GrowthLuxThreshold:0} lx — лампа вимкнена.";
         }
         else
         {
             var shortfall = (_agronomistOptions.GrowthLuxThreshold - ambientLux) / _agronomistOptions.GrowthLuxThreshold;
             lightBrightness = (int)Math.Round(Math.Clamp(shortfall * 255, 0, 255));
-            lightReason = $"Outside night rest, ambient {ambientLux:0}lx < {_agronomistOptions.GrowthLuxThreshold:0}lx threshold, " +
-                $"{lightHoursSoFarToday:0.#}h/{profile.DailyLightHoursTarget:0.#}h today -> {lightBrightness}";
+            lightReason = $"Природне світло {ambientLux:0} lx нижче {_agronomistOptions.GrowthLuxThreshold:0} lx, " +
+                $"сьогодні набрано {lightHoursSoFarToday:0.#}/{profile.DailyLightHoursTarget:0.#} год — яскравість {lightBrightness}/255.";
         }
 
         // Підігрів ґрунту працює у ДВОХ режимах, обидва пропорційним ШІМ (без
@@ -869,19 +873,19 @@ public class AiAgronomistService : BackgroundService
         if (latestSoilTemp is not { } soilTemp)
         {
             soilHeaterPower = 0;
-            soilHeaterReason = "No soil temperature sensor connected yet -> Off";
+            soilHeaterReason = "Немає показників датчика температури ґрунту — нагрівач вимкнений.";
         }
         else if (hasCeiling && soilTemp >= profile.SoilTempMaxC)
         {
             // Стеля завжди виграє — байдуже, гріли б ми для добору чи для просушки.
             soilHeaterPower = 0;
-            soilHeaterReason = $"SoilTemp {soilTemp:0.#}C >= max {profile.SoilTempMaxC:0.#}C -> Off (ceiling)";
+            soilHeaterReason = $"Температура ґрунту {soilTemp:0.#}°C досягла верхньої межі {profile.SoilTempMaxC:0.#}°C — нагрівач вимкнений.";
         }
         else if (soilTemp < profile.SoilTempMinC)
         {
             var deficit = profile.SoilTempMinC - soilTemp;
             soilHeaterPower = (int)Math.Round(Math.Clamp(deficit / _agronomistOptions.SoilHeaterFullPowerDeficitC, 0, 1) * 255);
-            soilHeaterReason = $"SoilTemp {soilTemp:0.#}C < min {profile.SoilTempMinC:0.#}C (deficit {deficit:0.#}C) -> {soilHeaterPower}";
+            soilHeaterReason = $"Температура ґрунту {soilTemp:0.#}°C нижча за {profile.SoilTempMinC:0.#}°C на {deficit:0.#}°C — потужність {soilHeaterPower}/255.";
         }
         else if (soilWet && hasCeiling)
         {
@@ -892,16 +896,14 @@ public class AiAgronomistService : BackgroundService
                 (profile.SoilTempMaxC - soilTemp) / _agronomistOptions.SoilDryingCeilingTaperC, 0, 1);
             soilHeaterPower = (int)Math.Round(Math.Min(moistureFactor, tempFactor) * 255);
             soilHeaterReason = soilHeaterPower > 0
-                ? $"SoilMoisture {latestSoil:0.#}% > max {profile.SoilMoistureMaxPct:0.#}% " +
-                  $"(excess {latestSoil - profile.SoilMoistureMaxPct:0.#}%), SoilTemp {soilTemp:0.#}/{profile.SoilTempMaxC:0.#}C " +
-                  $"-> drying at {soilHeaterPower}"
-                : $"SoilMoisture {latestSoil:0.#}% > max {profile.SoilMoistureMaxPct:0.#}% but SoilTemp {soilTemp:0.#}C " +
-                  $"near max {profile.SoilTempMaxC:0.#}C, easing off -> Off";
+                ? $"Ґрунт перезволожений: {latestSoil:0.#}% > {profile.SoilMoistureMaxPct:0.#}%; температура " +
+                  $"{soilTemp:0.#}/{profile.SoilTempMaxC:0.#}°C — просушка на потужності {soilHeaterPower}/255."
+                : $"Ґрунт перезволожений, але температура {soilTemp:0.#}°C близька до межі {profile.SoilTempMaxC:0.#}°C — нагрів припинено.";
         }
         else
         {
             soilHeaterPower = 0;
-            soilHeaterReason = $"SoilTemp {soilTemp:0.#}C in range, SoilMoisture within {profile.SoilMoistureMaxPct:0.#}% max -> Off";
+            soilHeaterReason = $"Температура й вологість ґрунту в цільовому діапазоні — нагрівач вимкнений.";
         }
 
         // Тимчасова апаратна стеля: хоч би що вирішили правила вище, не пускаємо
@@ -909,7 +911,7 @@ public class AiAgronomistService : BackgroundService
         // повітряного нагрівача).
         if (soilHeaterPower > _agronomistOptions.SoilHeaterMaxPower)
         {
-            soilHeaterReason += $" [capped -> {_agronomistOptions.SoilHeaterMaxPower}]";
+            soilHeaterReason += $" Потужність обмежено безпечним максимумом {_agronomistOptions.SoilHeaterMaxPower}/255.";
             soilHeaterPower = _agronomistOptions.SoilHeaterMaxPower;
         }
 
@@ -932,19 +934,19 @@ public class AiAgronomistService : BackgroundService
         if (latestTemp is not { } airTemp)
         {
             airHeaterPower = 0;
-            airHeaterReason = "No air temperature readings -> Off";
+            airHeaterReason = "Немає показників температури повітря — нагрівач вимкнений.";
         }
         else if (airTemp >= profile.TempMaxC)
         {
             airHeaterPower = 0;
-            airHeaterReason = $"AirTemp {airTemp:0.#}C >= max {profile.TempMaxC:0.#}C -> Off (ceiling)";
+            airHeaterReason = $"Температура повітря {airTemp:0.#}°C досягла верхньої межі {profile.TempMaxC:0.#}°C — нагрівач вимкнений.";
         }
         else if (tempSustainedLow)
         {
             var deficit = profile.TempMinC - airTemp;
             airHeaterPower = (int)Math.Round(Math.Clamp(deficit / _agronomistOptions.AirHeaterFullPowerDeficitC, 0, 1) * 255);
-            airHeaterReason = $"AirTemp {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}C < min " +
-                $"{profile.TempMinC:0.#}C (deficit {deficit:0.#}C) -> {airHeaterPower}";
+            airHeaterReason = $"Температури {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}°C нижчі за " +
+                $"{profile.TempMinC:0.#}°C; дефіцит {deficit:0.#}°C — потужність {airHeaterPower}/255.";
         }
         else if (humiditySustainedHigh)
         {
@@ -955,16 +957,14 @@ public class AiAgronomistService : BackgroundService
                 (profile.TempMaxC - airTemp) / _agronomistOptions.AirHeaterDryingCeilingTaperC, 0, 1);
             airHeaterPower = (int)Math.Round(Math.Min(humidityFactor, headroomFactor) * 255);
             airHeaterReason = airHeaterPower > 0
-                ? $"Humidity {latestHumidity:0.#}% > max {profile.HumidityMaxPct:0.#}% " +
-                  $"(excess {latestHumidity - profile.HumidityMaxPct:0.#}%), AirTemp {airTemp:0.#}/{profile.TempMaxC:0.#}C " +
-                  $"-> drying at {airHeaterPower}"
-                : $"Humidity {latestHumidity:0.#}% > max {profile.HumidityMaxPct:0.#}% but AirTemp {airTemp:0.#}C " +
-                  $"near max {profile.TempMaxC:0.#}C, easing off -> Off";
+                ? $"Вологість повітря {latestHumidity:0.#}% вища за {profile.HumidityMaxPct:0.#}%; температура " +
+                  $"{airTemp:0.#}/{profile.TempMaxC:0.#}°C — осушення на потужності {airHeaterPower}/255."
+                : $"Вологість зависока, але температура {airTemp:0.#}°C близька до межі {profile.TempMaxC:0.#}°C — нагрів припинено.";
         }
         else
         {
             airHeaterPower = 0;
-            airHeaterReason = $"AirTemp {airTemp:0.#}C in range, Humidity within {profile.HumidityMaxPct:0.#}% max -> Off";
+            airHeaterReason = "Температура й вологість повітря в цільовому діапазоні — нагрівач вимкнений.";
         }
 
         // Тимчасова апаратна стеля: хоч би що вирішили правила вище, не пускаємо
@@ -972,7 +972,7 @@ public class AiAgronomistService : BackgroundService
         // тривалий повний режим).
         if (airHeaterPower > _agronomistOptions.AirHeaterMaxPower)
         {
-            airHeaterReason += $" [capped -> {_agronomistOptions.AirHeaterMaxPower}]";
+            airHeaterReason += $" Потужність обмежено безпечним максимумом {_agronomistOptions.AirHeaterMaxPower}/255.";
             airHeaterPower = _agronomistOptions.AirHeaterMaxPower;
         }
 
@@ -987,10 +987,10 @@ public class AiAgronomistService : BackgroundService
         //      витяжка тягнула лише з одного кутка.
         var fanOn = airHeaterPower > 0 || exhaustFanOn;
         var fanReason = airHeaterPower > 0
-            ? $"On (air heater circulation at {airHeaterPower})"
+            ? $"Увімкнений для розподілу тепла від нагрівача повітря ({airHeaterPower}/255)."
             : exhaustFanOn
-                ? "On (circulating air while exhaust fan cools)"
-                : "Air heater off, exhaust fan off -> Off";
+                ? "Увімкнений для перемішування повітря під час роботи витяжки."
+                : "Нагрівач повітря і витяжка не працюють — циркуляція вимкнена.";
 
         var reason = $"{exhaustFanReason}; {fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}; {airHeaterReason}";
 
@@ -1015,6 +1015,13 @@ public class AiAgronomistService : BackgroundService
             LightBrightness = lightBrightness,
             SoilHeaterPower = soilHeaterPower,
             AirHeaterPower = airHeaterPower,
+            Source = StressTestForceActuatorsOn ? "StressTest" : "LocalController",
+            PumpReason = pumpReason,
+            FanReason = fanReason,
+            ExhaustFanReason = exhaustFanReason,
+            LightReason = lightReason,
+            SoilHeaterReason = soilHeaterReason,
+            AirHeaterReason = airHeaterReason,
             Reason = reason,
             PhotoDescription = string.Empty,
             PhotoFileName = null
