@@ -38,7 +38,7 @@ public class AutomationController : ControllerBase
                 "pump",
                 "Насос поливу",
                 "Повертає вологість ґрунту до середини безпечного діапазону.",
-                $"Вологість нижча за {Target(profile?.SoilMoistureMinPct, "%")} і падає протягом {_options.SoilMoistureTrendWindowMinutes} хв. Аварійний виняток — {SustainedReadings} нульові показники поспіль.",
+                $"Останні {SustainedReadings} показники нижчі за {Target(profile?.SoilMoistureMinPct, "%")}, а вологість падає протягом {_options.SoilMoistureTrendWindowMinutes} хв. Аварійний виняток — {SustainedReadings} нульові показники поспіль.",
                 $"Після досягнення середньої цілі {MidpointTarget(profile?.SoilMoistureMinPct, profile?.SoilMoistureMaxPct, "%")}; до неї подає короткі імпульси з безпечною паузою.",
                 $"Не частіше одного разу на {_options.MinMinutesBetweenWaterings} хв; ESP32 додатково обмежує тривалість роботи помпи."),
             new(

@@ -226,8 +226,9 @@ void loop() {
       Serial.printf("[СВІТЛО]   Освітленість: %.1f Lux\n", lastSensorData.lux);
       isNight = lastSensorData.lux < NIGHT_LUX_THRESHOLD;
     }
-    Serial.printf("[ҐРУНТ]    Raw ADC (GPIO%d): %d | Вологість: %.1f%% | valid=%d\n",
-                  SOIL_ADC_PIN, lastSensorData.soilRaw, lastSensorData.soilMoisturePct,
+    Serial.printf("[ҐРУНТ]    Raw ADC (GPIO%d): %d (медіана 5 хв; зараз %d) | Вологість: %.1f%% | valid=%d\n",
+                  SOIL_ADC_PIN, lastSensorData.soilRaw, lastSensorData.soilRawCurrent,
+                  lastSensorData.soilMoisturePct,
                   (int)lastSensorData.soilValid);
     if (lastSensorData.soilTempValid) {
       Serial.printf("[ҐРУНТ]    Температура: %.1f °C\n", lastSensorData.soilTempC);

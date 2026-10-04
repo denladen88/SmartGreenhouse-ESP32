@@ -15,7 +15,8 @@ struct SensorData {
   bool lightValid = false;
   float lux = 0.0f;
 
-  int soilRaw = 0;
+  int soilRaw = 0;              // медіана останніх хвилинних вимірювань, іде в MQTT
+  int soilRawCurrent = 0;       // поточна швидка медіана, лише для діагностики в Serial
   float soilMoisturePct = 0.0f; // 0 = сухо, 100 = мокро (перевід soilRaw через SOIL_RAW_WET/DRY)
   bool soilValid = false;       // false = ймовірно від'єднаний/обірваний зонд (див. SensorService::read)
 
@@ -37,6 +38,7 @@ public:
 
 private:
   static constexpr int kSoilSamples = 15;
+  static constexpr int kSoilSlowSamples = 5;
 
   void initBme();
   void initBh1750();
@@ -65,6 +67,9 @@ private:
   int _soilRing[kSoilSamples] = {0};
   uint8_t _soilRingIdx = 0;
   bool _soilRingFull = false;
+  int _soilSlowRing[kSoilSlowSamples] = {0};
+  uint8_t _soilSlowRingIdx = 0;
+  uint8_t _soilSlowCount = 0;
   NonBlockingTimer _soilSampleTimer{20UL};      // 1 відлік / 20 мс → ~300 мс вікна на 15 зразків
   NonBlockingTimer _reprobeTimer{300000UL};     // раз на 5 хв шукаємо відсутні сенсори
 };

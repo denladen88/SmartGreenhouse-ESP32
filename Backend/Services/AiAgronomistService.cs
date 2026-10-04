@@ -711,6 +711,11 @@ public class AiAgronomistService : BackgroundService
             .OrderBy(t => t.Timestamp)
             .Select(t => t.SoilMoisturePct!.Value)
             .ToListAsync(stoppingToken);
+        var recentSoilReadings = await db.Telemetries
+            .OrderByDescending(t => t.Timestamp)
+            .Take(MinSustainedReadings)
+            .Select(t => new { t.SoilMoisturePct, t.SoilValid })
+            .ToListAsync(stoppingToken);
 
         // TemperatureC і HumidityPct завжди приходять з одного зчитування BME280
         // (SensorService::read встановлює обидва разом під climateValid, ніколи
@@ -803,16 +808,27 @@ public class AiAgronomistService : BackgroundService
                 : "Немає показників температури повітря — витяжка вимкнена.";
         }
 
-        // Помпа: вологість спадає і вже нижче мінімуму, плюс не поливали нещодавно
+        // Помпа: щонайменше два останні показники нижче мінімуму, вологість
+        // спадає і не поливали нещодавно. Подвійне підтвердження не дозволяє
+        // одному випадковому стрибку резистивного зонда запустити полив.
         // (запобіжник від кореневої гнилі базиліка — див. Plant:CareNotes).
         // Окремий аварійний випадок — щонайменше два останні валідні показники
         // дорівнюють 0%: нижче значення вже фізично не може впасти, тому вимога
         // спадного тренду назавжди заблокувала б полив повністю сухого ґрунту.
         // Cooldown нижче однаково діє і для цього випадку.
         var soilDeclining = soilPoints.Count >= MinSustainedReadings && soilPoints[0] - soilPoints[^1] > 1.0;
-        var soilBelowMin = soilPoints.Count > 0 && soilPoints[^1] < profile.SoilMoistureMinPct;
-        var soilPersistentlyAtZero = soilPoints.Count >= MinSustainedReadings &&
-            soilPoints.TakeLast(MinSustainedReadings).All(p => p <= 0.0);
+        var hasValidLatestSoilReading = recentSoilReadings.Count > 0 &&
+            recentSoilReadings[0].SoilValid && recentSoilReadings[0].SoilMoisturePct.HasValue;
+        var latestSoilMoisturePct = hasValidLatestSoilReading
+            ? recentSoilReadings[0].SoilMoisturePct
+            : null;
+        var soilBelowMin = latestSoilMoisturePct < profile.SoilMoistureMinPct;
+        var soilSustainedBelowMin = recentSoilReadings.Count >= MinSustainedReadings &&
+            recentSoilReadings.All(p => p.SoilValid &&
+                p.SoilMoisturePct.HasValue && p.SoilMoisturePct.Value < profile.SoilMoistureMinPct);
+        var soilPersistentlyAtZero = recentSoilReadings.Count >= MinSustainedReadings &&
+            recentSoilReadings.All(p => p.SoilValid &&
+                p.SoilMoisturePct.HasValue && p.SoilMoisturePct.Value <= 0.0);
         var soilMoistureTargetPct = profile.SoilMoistureMaxPct > profile.SoilMoistureMinPct
             ? Midpoint(profile.SoilMoistureMinPct, profile.SoilMoistureMaxPct)
             : profile.SoilMoistureMinPct;
@@ -825,18 +841,18 @@ public class AiAgronomistService : BackgroundService
         var wateringCooldownElapsed = lastWateringUtc is null ||
             DateTime.UtcNow - lastWateringUtc.Value >= TimeSpan.FromMinutes(_agronomistOptions.MinMinutesBetweenWaterings);
 
-        var hasWateringDemand = soilBelowMin && (soilDeclining || soilPersistentlyAtZero);
-        if (soilPoints.Count > 0)
+        var hasWateringDemand = soilSustainedBelowMin && (soilDeclining || soilPersistentlyAtZero);
+        if (latestSoilMoisturePct is { } currentSoilMoisturePct)
         {
-            recoveryState.SoilWateringActive = soilPoints[^1] < soilMoistureTargetPct &&
+            recoveryState.SoilWateringActive = currentSoilMoisturePct < soilMoistureTargetPct &&
                 (recoveryState.SoilWateringActive || hasWateringDemand);
         }
 
-        var pumpOn = recoveryState.SoilWateringActive && soilPoints.Count > 0 && wateringCooldownElapsed;
+        var pumpOn = recoveryState.SoilWateringActive && latestSoilMoisturePct is not null && wateringCooldownElapsed;
         string pumpReason;
-        if (soilPoints.Count == 0)
+        if (latestSoilMoisturePct is null)
         {
-            pumpReason = "Немає валідних показників вологості ґрунту — полив заблоковано.";
+            pumpReason = "Останній показник вологості ґрунту невалідний або відсутній — полив заблоковано.";
         }
         else if (recoveryState.SoilWateringActive && !wateringCooldownElapsed)
         {
@@ -845,17 +861,22 @@ public class AiAgronomistService : BackgroundService
         }
         else if (pumpOn)
         {
-            pumpReason = $"Вологість {soilPoints[^1]:0.#}%: активний цикл поливу до середньої цілі " +
+            pumpReason = $"Вологість {latestSoilMoisturePct:0.#}%: активний цикл поливу до середньої цілі " +
                 $"{soilMoistureTargetPct:0.#}% — увімкнено короткий імпульс.";
+        }
+        else if (soilBelowMin && !soilSustainedBelowMin)
+        {
+            pumpReason = $"Вологість {latestSoilMoisturePct:0.#}% нижча за мінімум, але потрібно " +
+                $"{MinSustainedReadings} послідовні телеметрії нижче межі — чекаємо підтвердження.";
         }
         else if (soilBelowMin && !soilDeclining && !soilPersistentlyAtZero)
         {
-            pumpReason = $"Вологість {soilPoints[^1]:0.#}% нижча за мінімум, але не падає протягом " +
+            pumpReason = $"Вологість {latestSoilMoisturePct:0.#}% нижча за мінімум, але не падає протягом " +
                 $"{_agronomistOptions.SoilMoistureTrendWindowMinutes} хв — чекаємо підтвердження тренду.";
         }
         else
         {
-            pumpReason = $"Полив неактивний: {soilPoints[^1]:0.#}%. Новий цикл почнеться нижче " +
+            pumpReason = $"Полив неактивний: {latestSoilMoisturePct:0.#}%. Новий цикл почнеться нижче " +
                 $"{profile.SoilMoistureMinPct:0.#}% і завершиться на цілі {soilMoistureTargetPct:0.#}%.";
         }
 

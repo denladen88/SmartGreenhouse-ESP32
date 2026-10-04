@@ -150,7 +150,29 @@ SensorData SensorService::read() {
     }
     sorted[j + 1] = key;
   }
-  data.soilRaw = sorted[count / 2];
+  const int currentSoilRaw = sorted[count / 2];
+  data.soilRawCurrent = currentSoilRaw;
+
+  // Медіана з останніх п'яти хвилинних вимірювань прибирає повільні стрибки
+  // резистивного зонда, які не встигає відфільтрувати швидка вибірка вище.
+  _soilSlowRing[_soilSlowRingIdx] = currentSoilRaw;
+  _soilSlowRingIdx = (_soilSlowRingIdx + 1) % kSoilSlowSamples;
+  if (_soilSlowCount < kSoilSlowSamples) {
+    _soilSlowCount++;
+  }
+
+  int slowSorted[kSoilSlowSamples];
+  memcpy(slowSorted, _soilSlowRing, _soilSlowCount * sizeof(slowSorted[0]));
+  for (int i = 1; i < _soilSlowCount; i++) {
+    const int key = slowSorted[i];
+    int j = i - 1;
+    while (j >= 0 && slowSorted[j] > key) {
+      slowSorted[j + 1] = slowSorted[j];
+      j--;
+    }
+    slowSorted[j + 1] = key;
+  }
+  data.soilRaw = slowSorted[_soilSlowCount / 2];
 
   // Від'єднаний резистивний зонд: пін «плаває» біля верхньої межі ADC із великим
   // розкидом між зразками. Зонд у ґрунті (навіть сухому) дає стабільну медіану з
@@ -158,7 +180,7 @@ SensorData SensorService::read() {
   // обрив (raw біля межі + розкид великий) позначається невалідним. Остаточне
   // залізне рішення — pull-down 10 кОм на GPIO3: тоді обрив кола = ~0.
   int spread = sorted[count - 1] - sorted[0];
-  data.soilValid = !(data.soilRaw >= 3900 && spread > 400);
+  data.soilValid = !(currentSoilRaw >= 3900 && spread > 400);
 
   // Переведення сирого ADC у відсоток вологості за підтвердженими еталонами.
   // Формула загальна (не припускає WET==0), щоб калібрування можна було
