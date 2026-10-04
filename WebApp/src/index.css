@@ -380,6 +380,30 @@ button.secondary {
   gap: 8px;
 }
 
+.watering-today-card {
+  min-width: 170px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  text-align: right;
+}
+
+.watering-today-card span,
+.watering-today-card small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.watering-today-card strong {
+  display: block;
+  margin: 2px 0;
+  color: var(--accent);
+  font-size: 28px;
+  line-height: 1;
+}
+
 .health-badge,
 .status-pill,
 .decision-meta span {
@@ -714,6 +738,7 @@ button.secondary {
   .dashboard-page { gap: 28px; }
   .dashboard-hero { align-items: flex-start; flex-direction: column; padding: 20px; }
   .hero-status { align-items: flex-start; }
+  .watering-today-card { min-width: 0; width: 100%; text-align: left; }
   .metrics-grid,
   .actuator-grid,
   .rules-grid,

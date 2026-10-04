@@ -37,6 +37,12 @@ export interface AiDecisionRecord {
   photoDescription: string;
 }
 
+export interface WateringTodaySummary {
+  localDate: string;
+  count: number;
+  lastWateringUtc: string | null;
+}
+
 export interface AiCommand {
   pump_on: boolean;
   fan_on: boolean;

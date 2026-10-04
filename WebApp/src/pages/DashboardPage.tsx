@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useApiClient } from '../api/hooks';
 import { Sparkline } from '../components/Sparkline';
-import type { AiDecisionRecord, AutomationOverview, PlantProfile, TelemetryRecord } from '../types';
+import type { AiDecisionRecord, AutomationOverview, PlantProfile, TelemetryRecord, WateringTodaySummary } from '../types';
 
 type MetricTone = 'ok' | 'attention' | 'neutral';
 
@@ -46,6 +46,10 @@ function rangeState(value: number | null | undefined, min?: number, max?: number
 
 function formatDate(value: string | undefined) {
   return value ? new Date(value).toLocaleString('uk-UA') : '—';
+}
+
+function formatTime(value: string | null | undefined) {
+  return value ? new Date(value).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' }) : null;
 }
 
 function sourceLabel(source: string | undefined) {
@@ -96,15 +100,21 @@ export function DashboardPage() {
     queryFn: () => api.get<AutomationOverview>('/api/automation/overview'),
     refetchInterval: 60 * 1000,
   });
+  const wateringTodayQuery = useQuery({
+    queryKey: ['decisions', 'watering', 'today'],
+    queryFn: () => api.get<WateringTodaySummary>('/api/decisions/watering/today'),
+    refetchInterval: 60 * 1000,
+  });
 
   const latest = latestQuery.data ?? null;
   const history = historyQuery.data ?? [];
   const profile = profileQuery.data ?? null;
   const decision = decisionQuery.data ?? null;
   const automation = automationQuery.data ?? null;
+  const wateringToday = wateringTodayQuery.data ?? null;
   const refresh = () => {
     latestQuery.refetch(); historyQuery.refetch(); profileQuery.refetch();
-    decisionQuery.refetch(); automationQuery.refetch();
+    decisionQuery.refetch(); automationQuery.refetch(); wateringTodayQuery.refetch();
   };
 
   if ((latestQuery.isError || historyQuery.isError || profileQuery.isError) && !latest) {
@@ -137,6 +147,13 @@ export function DashboardPage() {
         <div><div className="eyebrow">SMART GREENHOUSE · LIVE</div><h1>{profile?.plantName || 'Огляд теплиці'}</h1>
           <p>{profile?.growthStage ? `Етап: ${profile.growthStage}` : 'Моніторинг середовища та автоматичного керування'}</p></div>
         <div className="hero-status">
+          <div className="watering-today-card">
+            <span>Поливів сьогодні</span>
+            <strong>{wateringTodayQuery.isLoading ? '…' : (wateringToday?.count ?? '—')}</strong>
+            <small>{wateringToday?.lastWateringUtc
+              ? `Останній о ${formatTime(wateringToday.lastWateringUtc)}`
+              : 'Сьогодні ще не було'}</small>
+          </div>
           <span className={`health-badge ${attentionCount ? 'health-attention' : 'health-ok'}`}>
             {attentionCount ? `${attentionCount} показники поза ціллю` : 'Ключові показники в нормі'}
           </span>
@@ -193,7 +210,7 @@ export function DashboardPage() {
         </div> : <div className="empty-card">AI ще не створив профіль для цієї рослини.</div>}
       </section>
 
-      {(decisionQuery.isError || automationQuery.isError) && <p className="inline-warning">Частину пояснень не вдалося оновити. Основні показники залишаються доступними.</p>}
+      {(decisionQuery.isError || automationQuery.isError || wateringTodayQuery.isError) && <p className="inline-warning">Частину пояснень або добову статистику не вдалося оновити. Основні показники залишаються доступними.</p>}
     </div>
   );
 }

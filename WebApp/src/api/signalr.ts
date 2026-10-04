@@ -42,6 +42,9 @@ export function useLiveUpdates(): LiveStatus {
 
     connection.on('DecisionReceived', (record: AiDecisionRecord) => {
       queryClient.setQueryData(['decisions', 'latest'], record);
+      if (record.pumpOn) {
+        queryClient.invalidateQueries({ queryKey: ['decisions', 'watering', 'today'] });
+      }
       // Дедуп за id — той самий фікс, що й у мобільному застосунку
       // (MobileApp/src/api/signalr.ts): без нього дублікати ламали
       // key-based рендер списку історії. Обрізаємо до тієї ж довжини, що
