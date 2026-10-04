@@ -34,6 +34,37 @@ public class AiAgronomistService : BackgroundService
     private const double HumidityOrderMarginPct = 10.0;
     private const double SoilMoistureOrderMarginPct = 10.0;
 
+    private static double Midpoint(double min, double max) => min + (max - min) / 2.0;
+
+    private static int ProportionalPower(double deviation, double fullPowerDeviation)
+    {
+        if (deviation <= 0)
+        {
+            return 0;
+        }
+
+        var ratio = fullPowerDeviation > 0 ? deviation / fullPowerDeviation : 1.0;
+        return Math.Max(1, (int)Math.Round(Math.Clamp(ratio, 0, 1) * 255));
+    }
+
+    private static int LimitedProportionalPower(double deviation, double fullPowerDeviation,
+        double safetyHeadroom, double safetyTaper)
+    {
+        if (deviation <= 0 || safetyHeadroom <= 0)
+        {
+            return 0;
+        }
+
+        var deviationFactor = fullPowerDeviation > 0
+            ? Math.Clamp(deviation / fullPowerDeviation, 0, 1)
+            : 1.0;
+        var safetyFactor = safetyTaper > 0
+            ? Math.Clamp(safetyHeadroom / safetyTaper, 0, 1)
+            : 1.0;
+        var factor = Math.Min(deviationFactor, safetyFactor);
+        return factor > 0 ? Math.Max(1, (int)Math.Round(factor * 255)) : 0;
+    }
+
     private readonly ILogger<AiAgronomistService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly GeminiOptions _geminiOptions;
@@ -59,7 +90,7 @@ public class AiAgronomistService : BackgroundService
     // fans/light/heaters stay under continuous load for a burn-in test.
     // Pump stays governed by the normal rule (never forced on) so it doesn't
     // run unattended for the duration of the test.
-    private const bool StressTestForceActuatorsOn = false;
+    private static readonly bool StressTestForceActuatorsOn = false;
 
     public AiAgronomistService(
         ILogger<AiAgronomistService> logger,
@@ -662,6 +693,14 @@ public class AiAgronomistService : BackgroundService
             return;
         }
 
+        var recoveryState = await db.ControlRecoveryStates
+            .SingleOrDefaultAsync(s => s.PlantName == plantName, stoppingToken);
+        if (recoveryState is null)
+        {
+            recoveryState = new ControlRecoveryState { PlantName = plantName };
+            db.ControlRecoveryStates.Add(recoveryState);
+        }
+
         var soilWindowStart = DateTime.UtcNow - TimeSpan.FromMinutes(_agronomistOptions.SoilMoistureTrendWindowMinutes);
         // t.SoilValid: прошивка позначає ним показник, який ймовірно від сенсора,
         // що відвалився/обірваний (див. SensorService::read у ESP-32) — без цього
@@ -710,62 +749,57 @@ public class AiAgronomistService : BackgroundService
             .Select(t => t.SoilTempC)
             .FirstOrDefaultAsync(stoppingToken);
 
-        // Витяжка: ТІЛЬКИ охолодження повітря (виводить його назовні). Вмикається,
-        // коли останні MinSustainedReadings замірів температури всі вище
-        // PlantProfile.TempMaxC (стійкий перегрів, а не один випадковий стрибок),
-        // і працює далі з гістерезисом — доки повітря не охолоне до
-        // (TempMaxC - ExhaustFanHysteresisC). Без цього "мертвого діапазону" реле
-        // смикало б туди-сюди щоразу, коли температура тремтить рівно біля стелі.
-        //
-        // Вологість більше НЕ керує витяжкою (прибрано на прохання ще для
-        // попереднього вентилятора) — це суто температурний прилад на
-        // охолодження. Осушення повітря — робота повітряного нагрівача (нижче),
-        // не витяжки.
-        //
-        // Вентилятор циркуляції (FanOn, окремий від витяжки) знову задіяний і
-        // при охолодженні — вмикається разом із витяжкою для перемішування
-        // повітря по обʼєму теплиці (див. "fanOn = airHeaterPower > 0 ||
-        // exhaustFanOn" нижче), а не лише для обдуву повітряного нагрівача.
-        var exhaustFanWasOn = await db.AiDecisions
-            .OrderByDescending(d => d.Timestamp)
-            .Select(d => (bool?)d.ExhaustFanOn)
-            .FirstOrDefaultAsync(stoppingToken) ?? false;
-
         var latestTemp = recentTemps.Count > 0 ? (double?)recentTemps[0] : null;
+        var latestHumidity = recentHumidity.Count > 0 ? (double?)recentHumidity[0] : null;
+        var airTempTargetC = profile.TempMaxC > profile.TempMinC
+            ? Midpoint(profile.TempMinC, profile.TempMaxC)
+            : profile.TempMinC;
+        var hasHumidityRange = profile.HumidityMaxPct > profile.HumidityMinPct;
+        var airHumidityTargetPct = hasHumidityRange
+            ? Midpoint(profile.HumidityMinPct, profile.HumidityMaxPct)
+            : profile.HumidityMaxPct;
+
         var tempSustainedHigh = recentTemps.Count >= MinSustainedReadings &&
             recentTemps.All(t => t > profile.TempMaxC);
-        var exhaustFanReleaseTempC = profile.TempMaxC - _agronomistOptions.ExhaustFanHysteresisC;
-
-        // Для повітряного нагрівача (нижче): стійко холодне повітря — усі останні
-        // MinSustainedReadings замірів нижче TempMinC; стійко волога — усі
-        // останні заміри RH вище HumidityMaxPct (і сама межа реально задана
-        // профілем, HumidityMaxPct > 0 — інакше режим осушення вимкнено, як
-        // hasCeiling у ґрунтового нагрівача).
         var tempSustainedLow = recentTemps.Count >= MinSustainedReadings &&
             recentTemps.All(t => t < profile.TempMinC);
-        var humiditySustainedHigh = profile.HumidityMaxPct > 0 &&
+        var humiditySustainedHigh = hasHumidityRange &&
             recentHumidity.Count >= MinSustainedReadings &&
             recentHumidity.All(h => h > profile.HumidityMaxPct);
 
-        bool exhaustFanOn;
-        string exhaustFanReason;
-        if (tempSustainedHigh)
+        // Межа лише запускає корекцію. Після запуску стан зберігається в БД і
+        // актуатор працює до середини дозволеного діапазону, а не вимикається
+        // одразу після повернення за min/max.
+        if (latestTemp is { } currentAirTemp)
         {
-            exhaustFanOn = true;
-            exhaustFanReason = $"Температури {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}°C вищі за " +
-                $"максимум {profile.TempMaxC:0.#}°C ({recentTemps.Count} заміри) — увімкнено охолодження.";
+            recoveryState.AirHeatingActive = currentAirTemp < airTempTargetC &&
+                (recoveryState.AirHeatingActive || tempSustainedLow);
+            recoveryState.AirCoolingActive = currentAirTemp > airTempTargetC &&
+                (recoveryState.AirCoolingActive || tempSustainedHigh);
         }
-        else if (exhaustFanWasOn && latestTemp is { } stillWarm && stillWarm > exhaustFanReleaseTempC)
+
+        if (!hasHumidityRange)
         {
-            exhaustFanOn = true;
-            exhaustFanReason = $"Температура {stillWarm:0.#}°C ще вища за поріг вимкнення " +
-                $"{exhaustFanReleaseTempC:0.#}°C — витяжка продовжує охолодження з гістерезисом.";
+            recoveryState.AirDryingActive = false;
+        }
+        else if (latestHumidity is { } currentHumidity)
+        {
+            recoveryState.AirDryingActive = currentHumidity > airHumidityTargetPct &&
+                (recoveryState.AirDryingActive || humiditySustainedHigh);
+        }
+
+        var exhaustFanOn = recoveryState.AirCoolingActive && latestTemp is not null;
+        string exhaustFanReason;
+        if (exhaustFanOn)
+        {
+            exhaustFanReason = $"Температура {latestTemp:0.#}°C вийшла вище {profile.TempMaxC:0.#}°C; " +
+                $"витяжка охолоджує до середньої цілі {airTempTargetC:0.#}°C.";
         }
         else
         {
-            exhaustFanOn = false;
-            exhaustFanReason = latestTemp is { } coolEnough
-                ? $"Температура {coolEnough:0.#}°C не вища за поріг запуску/утримання — витяжка вимкнена."
+            exhaustFanReason = latestTemp is { } measuredAirTemp
+                ? $"Температура {measuredAirTemp:0.#}°C не потребує активного охолодження; " +
+                  $"наступний цикл почнеться лише вище {profile.TempMaxC:0.#}°C."
                 : "Немає показників температури повітря — витяжка вимкнена.";
         }
 
@@ -779,6 +813,9 @@ public class AiAgronomistService : BackgroundService
         var soilBelowMin = soilPoints.Count > 0 && soilPoints[^1] < profile.SoilMoistureMinPct;
         var soilPersistentlyAtZero = soilPoints.Count >= MinSustainedReadings &&
             soilPoints.TakeLast(MinSustainedReadings).All(p => p <= 0.0);
+        var soilMoistureTargetPct = profile.SoilMoistureMaxPct > profile.SoilMoistureMinPct
+            ? Midpoint(profile.SoilMoistureMinPct, profile.SoilMoistureMaxPct)
+            : profile.SoilMoistureMinPct;
 
         var lastWateringUtc = await db.AiDecisions
             .Where(d => d.PumpOn)
@@ -789,17 +826,38 @@ public class AiAgronomistService : BackgroundService
             DateTime.UtcNow - lastWateringUtc.Value >= TimeSpan.FromMinutes(_agronomistOptions.MinMinutesBetweenWaterings);
 
         var hasWateringDemand = soilBelowMin && (soilDeclining || soilPersistentlyAtZero);
-        var pumpOn = hasWateringDemand && wateringCooldownElapsed;
-        var pumpReason = !soilBelowMin
-            ? $"Вологість ґрунту {(soilPoints.Count > 0 ? soilPoints[^1].ToString("0.#") : "N/A")}% не нижча за " +
-              $"мінімум {profile.SoilMoistureMinPct:0.#}% — полив не потрібен."
-            : !soilDeclining && !soilPersistentlyAtZero
-                ? $"Вологість нижча за норму, але не падає протягом {_agronomistOptions.SoilMoistureTrendWindowMinutes} хв — очікуємо."
-                : !wateringCooldownElapsed
-                    ? $"Полив потрібен, але після попереднього ще не минуло {_agronomistOptions.MinMinutesBetweenWaterings} хв — пауза безпеки."
-                    : soilPersistentlyAtZero
-                        ? $"Останні {MinSustainedReadings} валідні показники дорівнюють 0% — увімкнено полив."
-                        : $"Вологість {soilPoints[^1]:0.#}% нижча за {profile.SoilMoistureMinPct:0.#}% і продовжує падати — увімкнено полив.";
+        if (soilPoints.Count > 0)
+        {
+            recoveryState.SoilWateringActive = soilPoints[^1] < soilMoistureTargetPct &&
+                (recoveryState.SoilWateringActive || hasWateringDemand);
+        }
+
+        var pumpOn = recoveryState.SoilWateringActive && soilPoints.Count > 0 && wateringCooldownElapsed;
+        string pumpReason;
+        if (soilPoints.Count == 0)
+        {
+            pumpReason = "Немає валідних показників вологості ґрунту — полив заблоковано.";
+        }
+        else if (recoveryState.SoilWateringActive && !wateringCooldownElapsed)
+        {
+            pumpReason = $"Полив триває до середньої цілі {soilMoistureTargetPct:0.#}%, але після попереднього імпульсу " +
+                $"ще не минуло {_agronomistOptions.MinMinutesBetweenWaterings} хв — пауза безпеки.";
+        }
+        else if (pumpOn)
+        {
+            pumpReason = $"Вологість {soilPoints[^1]:0.#}%: активний цикл поливу до середньої цілі " +
+                $"{soilMoistureTargetPct:0.#}% — увімкнено короткий імпульс.";
+        }
+        else if (soilBelowMin && !soilDeclining && !soilPersistentlyAtZero)
+        {
+            pumpReason = $"Вологість {soilPoints[^1]:0.#}% нижча за мінімум, але не падає протягом " +
+                $"{_agronomistOptions.SoilMoistureTrendWindowMinutes} хв — чекаємо підтвердження тренду.";
+        }
+        else
+        {
+            pumpReason = $"Полив неактивний: {soilPoints[^1]:0.#}%. Новий цикл почнеться нижче " +
+                $"{profile.SoilMoistureMinPct:0.#}% і завершиться на цілі {soilMoistureTargetPct:0.#}%.";
+        }
 
         // Світло: рахуємо ГОДИНИ, коли рослина реально отримувала світло — і від
         // сонця (ambient Lux >= порогу), і від самого grow light (коли він був
@@ -844,8 +902,8 @@ public class AiAgronomistService : BackgroundService
 
         // Підігрів ґрунту працює у ДВОХ режимах, обидва пропорційним ШІМ (без
         // on/off-стрибків):
-        //   1) добір температури — лінійне наростання від 0 (на SoilTempMinC) до
-        //      255 (дефіцит SoilHeaterFullPowerDeficitC і більше);
+        //   1) добір температури — SoilTempMinC запускає цикл, який триває до
+        //      середини SoilTempMinC/MaxC; потужність пропорційна відстані до неї;
         //   2) просушка перезволоженого ґрунту — коли SoilMoisturePct стійко вище
         //      SoilMoistureMaxPct, підігрів прискорює випаровування з кореневої
         //      зони (базилік гине насамперед від гнилі при мокрому ґрунті — див.
@@ -865,8 +923,27 @@ public class AiAgronomistService : BackgroundService
         // hasCeiling: якщо профіль ще не задав SoilTempMaxC (0 чи <= SoilTempMinC),
         // поводимось як раніше — тільки добір температури, просушка вимкнена.
         var soilWet = soilPoints.Count >= MinSustainedReadings &&
-            soilPoints.All(p => p > profile.SoilMoistureMaxPct);
+            soilPoints.TakeLast(MinSustainedReadings).All(p => p > profile.SoilMoistureMaxPct);
         var hasCeiling = profile.SoilTempMaxC > profile.SoilTempMinC;
+        var soilTempTargetC = hasCeiling
+            ? Midpoint(profile.SoilTempMinC, profile.SoilTempMaxC)
+            : profile.SoilTempMinC;
+
+        if (latestSoilTemp is { } currentSoilTemp)
+        {
+            recoveryState.SoilHeatingActive = currentSoilTemp < soilTempTargetC &&
+                (recoveryState.SoilHeatingActive || currentSoilTemp < profile.SoilTempMinC);
+        }
+
+        if (!hasCeiling)
+        {
+            recoveryState.SoilDryingActive = false;
+        }
+        else if (soilPoints.Count > 0)
+        {
+            recoveryState.SoilDryingActive = soilPoints[^1] > soilMoistureTargetPct &&
+                (recoveryState.SoilDryingActive || soilWet);
+        }
 
         int soilHeaterPower;
         string soilHeaterReason;
@@ -879,31 +956,39 @@ public class AiAgronomistService : BackgroundService
         {
             // Стеля завжди виграє — байдуже, гріли б ми для добору чи для просушки.
             soilHeaterPower = 0;
-            soilHeaterReason = $"Температура ґрунту {soilTemp:0.#}°C досягла верхньої межі {profile.SoilTempMaxC:0.#}°C — нагрівач вимкнений.";
-        }
-        else if (soilTemp < profile.SoilTempMinC)
-        {
-            var deficit = profile.SoilTempMinC - soilTemp;
-            soilHeaterPower = (int)Math.Round(Math.Clamp(deficit / _agronomistOptions.SoilHeaterFullPowerDeficitC, 0, 1) * 255);
-            soilHeaterReason = $"Температура ґрунту {soilTemp:0.#}°C нижча за {profile.SoilTempMinC:0.#}°C на {deficit:0.#}°C — потужність {soilHeaterPower}/255.";
-        }
-        else if (soilWet && hasCeiling)
-        {
-            var latestSoil = soilPoints[^1];
-            var moistureFactor = Math.Clamp(
-                (latestSoil - profile.SoilMoistureMaxPct) / _agronomistOptions.SoilDryingFullPowerExcessPct, 0, 1);
-            var tempFactor = Math.Clamp(
-                (profile.SoilTempMaxC - soilTemp) / _agronomistOptions.SoilDryingCeilingTaperC, 0, 1);
-            soilHeaterPower = (int)Math.Round(Math.Min(moistureFactor, tempFactor) * 255);
-            soilHeaterReason = soilHeaterPower > 0
-                ? $"Ґрунт перезволожений: {latestSoil:0.#}% > {profile.SoilMoistureMaxPct:0.#}%; температура " +
-                  $"{soilTemp:0.#}/{profile.SoilTempMaxC:0.#}°C — просушка на потужності {soilHeaterPower}/255."
-                : $"Ґрунт перезволожений, але температура {soilTemp:0.#}°C близька до межі {profile.SoilTempMaxC:0.#}°C — нагрів припинено.";
+            soilHeaterReason = $"Температура ґрунту {soilTemp:0.#}°C досягла жорсткої межі " +
+                $"{profile.SoilTempMaxC:0.#}°C — нагрівач тимчасово вимкнений.";
         }
         else
         {
-            soilHeaterPower = 0;
-            soilHeaterReason = $"Температура й вологість ґрунту в цільовому діапазоні — нагрівач вимкнений.";
+            var heatingPower = recoveryState.SoilHeatingActive
+                ? ProportionalPower(soilTempTargetC - soilTemp, _agronomistOptions.SoilHeaterFullPowerDeficitC)
+                : 0;
+            var dryingPower = recoveryState.SoilDryingActive && soilPoints.Count > 0 && hasCeiling
+                ? LimitedProportionalPower(
+                    soilPoints[^1] - soilMoistureTargetPct,
+                    _agronomistOptions.SoilDryingFullPowerExcessPct,
+                    profile.SoilTempMaxC - soilTemp,
+                    _agronomistOptions.SoilDryingCeilingTaperC)
+                : 0;
+            soilHeaterPower = Math.Max(heatingPower, dryingPower);
+
+            var activeReasons = new List<string>();
+            if (heatingPower > 0)
+            {
+                activeReasons.Add($"підігрів ґрунту {soilTemp:0.#}→{soilTempTargetC:0.#}°C ({heatingPower}/255)");
+            }
+            if (dryingPower > 0)
+            {
+                activeReasons.Add($"просушка {soilPoints[^1]:0.#}→{soilMoistureTargetPct:0.#}% ({dryingPower}/255)");
+            }
+
+            soilHeaterReason = activeReasons.Count > 0
+                ? $"Активний цикл до середини діапазону: {string.Join("; ", activeReasons)}. Команда {soilHeaterPower}/255."
+                : recoveryState.SoilDryingActive
+                    ? $"Просушка до {soilMoistureTargetPct:0.#}% ще активна, але температурний захист зараз не дозволяє нагрів."
+                    : $"Нагрівач неактивний. Новий цикл температури почнеться нижче {profile.SoilTempMinC:0.#}°C, " +
+                      $"просушки — вище {profile.SoilMoistureMaxPct:0.#}%.";
         }
 
         // Тимчасова апаратна стеля: хоч би що вирішили правила вище, не пускаємо
@@ -917,12 +1002,12 @@ public class AiAgronomistService : BackgroundService
 
         // Повітряний нагрівач: ДВА режими, обидва пропорційним ШІМ, дзеркалять
         // грілку ґрунту (RunLocalControlAsync вище):
-        //   1) добір температури — коли повітря стійко нижче TempMinC, потужність
-        //      лінійно 0..255 на дефіциті AirHeaterFullPowerDeficitC;
+        //   1) добір температури — TempMinC запускає цикл до середини
+        //      TempMinC/MaxC, потужність пропорційна відстані до цієї цілі;
         //   2) осушення — коли RH стійко вище HumidityMaxPct, підігрів піднімає
         //      температуру => падає відносна вологість і конденсат не осідає на
         //      листі. Потужність = мінімум двох лінійних факторів: наскільки RH
-        //      над ціллю (humidityFactor) і скільки лишилось "запасу" під стелею
+        //      над серединою діапазону і скільки лишилось "запасу" під стелею
         //      TempMaxC (headroomFactor). Тож нагрів сам стихає і коли повітря
         //      підсохло до цілі, і коли температура підійшла до стелі; на самій
         //      TempMaxC — жорсткий обрив.
@@ -936,35 +1021,43 @@ public class AiAgronomistService : BackgroundService
             airHeaterPower = 0;
             airHeaterReason = "Немає показників температури повітря — нагрівач вимкнений.";
         }
-        else if (airTemp >= profile.TempMaxC)
+        else if (airTemp >= profile.TempMaxC || recoveryState.AirCoolingActive)
         {
             airHeaterPower = 0;
-            airHeaterReason = $"Температура повітря {airTemp:0.#}°C досягла верхньої межі {profile.TempMaxC:0.#}°C — нагрівач вимкнений.";
-        }
-        else if (tempSustainedLow)
-        {
-            var deficit = profile.TempMinC - airTemp;
-            airHeaterPower = (int)Math.Round(Math.Clamp(deficit / _agronomistOptions.AirHeaterFullPowerDeficitC, 0, 1) * 255);
-            airHeaterReason = $"Температури {string.Join("/", recentTemps.Select(t => t.ToString("0.#")))}°C нижчі за " +
-                $"{profile.TempMinC:0.#}°C; дефіцит {deficit:0.#}°C — потужність {airHeaterPower}/255.";
-        }
-        else if (humiditySustainedHigh)
-        {
-            var latestHumidity = recentHumidity[0];
-            var humidityFactor = Math.Clamp(
-                (latestHumidity - profile.HumidityMaxPct) / _agronomistOptions.AirHeaterDryingFullPowerExcessPct, 0, 1);
-            var headroomFactor = Math.Clamp(
-                (profile.TempMaxC - airTemp) / _agronomistOptions.AirHeaterDryingCeilingTaperC, 0, 1);
-            airHeaterPower = (int)Math.Round(Math.Min(humidityFactor, headroomFactor) * 255);
-            airHeaterReason = airHeaterPower > 0
-                ? $"Вологість повітря {latestHumidity:0.#}% вища за {profile.HumidityMaxPct:0.#}%; температура " +
-                  $"{airTemp:0.#}/{profile.TempMaxC:0.#}°C — осушення на потужності {airHeaterPower}/255."
-                : $"Вологість зависока, але температура {airTemp:0.#}°C близька до межі {profile.TempMaxC:0.#}°C — нагрів припинено.";
+            airHeaterReason = recoveryState.AirCoolingActive
+                ? $"Активне охолодження повітря до {airTempTargetC:0.#}°C — нагрівач заблоковано, щоб не протидіяти витяжці."
+                : $"Температура повітря {airTemp:0.#}°C досягла жорсткої межі {profile.TempMaxC:0.#}°C — нагрівач вимкнений.";
         }
         else
         {
-            airHeaterPower = 0;
-            airHeaterReason = "Температура й вологість повітря в цільовому діапазоні — нагрівач вимкнений.";
+            var heatingPower = recoveryState.AirHeatingActive
+                ? ProportionalPower(airTempTargetC - airTemp, _agronomistOptions.AirHeaterFullPowerDeficitC)
+                : 0;
+            var dryingPower = recoveryState.AirDryingActive && latestHumidity is { } humidity
+                ? LimitedProportionalPower(
+                    humidity - airHumidityTargetPct,
+                    _agronomistOptions.AirHeaterDryingFullPowerExcessPct,
+                    profile.TempMaxC - airTemp,
+                    _agronomistOptions.AirHeaterDryingCeilingTaperC)
+                : 0;
+            airHeaterPower = Math.Max(heatingPower, dryingPower);
+
+            var activeReasons = new List<string>();
+            if (heatingPower > 0)
+            {
+                activeReasons.Add($"підігрів повітря {airTemp:0.#}→{airTempTargetC:0.#}°C ({heatingPower}/255)");
+            }
+            if (dryingPower > 0 && latestHumidity is { } activeHumidity)
+            {
+                activeReasons.Add($"осушення {activeHumidity:0.#}→{airHumidityTargetPct:0.#}% ({dryingPower}/255)");
+            }
+
+            airHeaterReason = activeReasons.Count > 0
+                ? $"Активний цикл до середини діапазону: {string.Join("; ", activeReasons)}. Команда {airHeaterPower}/255."
+                : recoveryState.AirDryingActive
+                    ? $"Осушення до {airHumidityTargetPct:0.#}% ще активне, але температурний захист зараз не дозволяє нагрів."
+                    : $"Нагрівач неактивний. Новий цикл температури почнеться нижче {profile.TempMinC:0.#}°C, " +
+                      $"осушення — вище {profile.HumidityMaxPct:0.#}%.";
         }
 
         // Тимчасова апаратна стеля: хоч би що вирішили правила вище, не пускаємо
@@ -1006,6 +1099,8 @@ public class AiAgronomistService : BackgroundService
             airHeaterPower = _agronomistOptions.AirHeaterMaxPower;
             reason = $"[STRESS TEST: all actuators forced on except pump] {reason}";
         }
+
+        recoveryState.UpdatedUtc = DateTime.UtcNow;
 
         var decisionRecord = new AiDecisionRecord
         {

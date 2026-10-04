@@ -7,6 +7,7 @@ public class AppDbContext : DbContext
 {
     public DbSet<TelemetryRecord> Telemetries => Set<TelemetryRecord>();
     public DbSet<AiDecisionRecord> AiDecisions => Set<AiDecisionRecord>();
+    public DbSet<ControlRecoveryState> ControlRecoveryStates => Set<ControlRecoveryState>();
     public DbSet<PlantProfile> PlantProfiles => Set<PlantProfile>();
     public DbSet<Planting> Plantings => Set<Planting>();
 

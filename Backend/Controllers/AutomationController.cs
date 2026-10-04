@@ -28,15 +28,18 @@ public class AutomationController : ControllerBase
             .FirstOrDefaultAsync(ct);
 
         string Target(double? value, string suffix) => value is null ? "ціль AI ще не визначена" : $"{value:0.#}{suffix}";
+        string MidpointTarget(double? min, double? max, string suffix) => min is null || max is null
+            ? "ціль AI ще не визначена"
+            : $"{min + (max - min) / 2.0:0.#}{suffix}";
 
         var rules = new List<AutomationRule>
         {
             new(
                 "pump",
                 "Насос поливу",
-                "Повертає вологість ґрунту до безпечного діапазону.",
+                "Повертає вологість ґрунту до середини безпечного діапазону.",
                 $"Вологість нижча за {Target(profile?.SoilMoistureMinPct, "%")} і падає протягом {_options.SoilMoistureTrendWindowMinutes} хв. Аварійний виняток — {SustainedReadings} нульові показники поспіль.",
-                "Після одного короткого імпульсу; наступний запуск оцінюється заново за свіжими даними.",
+                $"Після досягнення середньої цілі {MidpointTarget(profile?.SoilMoistureMinPct, profile?.SoilMoistureMaxPct, "%")}; до неї подає короткі імпульси з безпечною паузою.",
                 $"Не частіше одного разу на {_options.MinMinutesBetweenWaterings} хв; ESP32 додатково обмежує тривалість роботи помпи."),
             new(
                 "light",
@@ -50,22 +53,22 @@ public class AutomationController : ControllerBase
                 "Нагрівач ґрунту",
                 "Підігріває кореневу зону або мʼяко просушує надто вологий ґрунт.",
                 $"Температура ґрунту нижча за {Target(profile?.SoilTempMinC, "°C")}; або останні {SustainedReadings} показники вологості вищі за {Target(profile?.SoilMoistureMaxPct, "%")}. Потужність пропорційна відхиленню.",
-                $"На цільовій температурі/вологості або при досягненні верхньої межі {Target(profile?.SoilTempMaxC, "°C")}.",
+                $"На середній цілі: температура {MidpointTarget(profile?.SoilTempMinC, profile?.SoilTempMaxC, "°C")}, вологість {MidpointTarget(profile?.SoilMoistureMinPct, profile?.SoilMoistureMaxPct, "%")}. Верхня межа {Target(profile?.SoilTempMaxC, "°C")} завжди вимикає нагрів.",
                 $"Жорстка межа температури та ліміт потужності {_options.SoilHeaterMaxPower}/255; ESP32 вимикає нагрівач без повторних команд."),
             new(
                 "air-heater",
                 "Нагрівач повітря",
                 "Підігріває повітря або знижує відносну вологість без витяжки тепла назовні.",
                 $"Останні {SustainedReadings} температури нижчі за {Target(profile?.TempMinC, "°C")}; або останні {SustainedReadings} значення вологості вищі за {Target(profile?.HumidityMaxPct, "%")}. Потужність пропорційна відхиленню.",
-                $"Коли параметр повернувся до норми або температура досягла {Target(profile?.TempMaxC, "°C")}.",
+                $"На середній цілі: температура {MidpointTarget(profile?.TempMinC, profile?.TempMaxC, "°C")}, вологість {MidpointTarget(profile?.HumidityMinPct, profile?.HumidityMaxPct, "%")}. При активному охолодженні або на {Target(profile?.TempMaxC, "°C")} нагрів блокується.",
                 $"Ліміт потужності {_options.AirHeaterMaxPower}/255; циркуляційний вентилятор вмикається разом із нагрівачем."),
             new(
                 "exhaust",
                 "Витяжка",
                 "Виводить гаряче повітря з теплиці.",
                 $"Останні {SustainedReadings} температури повітря вищі за {Target(profile?.TempMaxC, "°C")}.",
-                $"Після охолодження до верхньої межі мінус {_options.ExhaustFanHysteresisC:0.#}°C.",
-                "Гістерезис захищає реле від частого перемикання біля порога."),
+                $"Після охолодження до середини діапазону {MidpointTarget(profile?.TempMinC, profile?.TempMaxC, "°C")}.",
+                "Стан корекції зберігається між циклами та після перезапуску бекенду."),
             new(
                 "fan",
                 "Циркуляційний вентилятор",
@@ -76,7 +79,7 @@ public class AutomationController : ControllerBase
         };
 
         return Ok(new AutomationOverview(
-            "Актуаторами керує локальний контролер за правилами; AI лише оновлює цільові діапазони.",
+            "Актуаторами керує локальний контролер: вихід за min/max запускає корекцію до середини діапазону; AI лише оновлює самі діапазони.",
             $"Перерахунок після кожної нової телеметрії; резервне повторення команди кожні {_options.LocalControlIntervalMinutes} хв.",
             rules));
     }

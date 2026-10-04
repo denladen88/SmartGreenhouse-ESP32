@@ -25,8 +25,7 @@ public class PlantProfile
     public double SoilMoistureMinPct { get; set; }
     public double SoilMoistureMaxPct { get; set; }
 
-    // Локальне правило підігріву (AiAgronomistService.RunLocalControlAsync) тримає
-    // ґрунт не нижче цього порогу пропорційним ШІМ.
+    // Нижче цього порогу запускається підігрів до середини SoilTempMinC/MaxC.
     public double SoilTempMinC { get; set; }
 
     // Верхня межа температури кореневої зони: локальне правило підігріву обриває
@@ -36,7 +35,7 @@ public class PlantProfile
     // теплом" могло б перегріти корені. Потужність просушки лінійно спадає до нуля
     // на останніх SoilDryingCeilingTaperC °C перед стелею, тож підхід до неї
     // м'який, а не різкий обрив. 0 (чи <= SoilTempMinC) = профіль ще не задав межу,
-    // тоді просушка вимкнена, а нагрів працює лише за старим правилом дефіциту.
+    // тоді просушка вимкнена, а нагрів завершується на SoilTempMinC.
     public double SoilTempMaxC { get; set; }
 
     public double DailyLightHoursTarget { get; set; }
