@@ -425,6 +425,28 @@ button.secondary {
   background: var(--warning-soft);
 }
 
+.health-offline {
+  color: #fff;
+  background: var(--danger);
+}
+
+.telemetry-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 14px 18px;
+  border: 1px solid #e8aaa5;
+  border-left: 4px solid var(--danger);
+  border-radius: 12px;
+  color: #76231e;
+  background: #fff0ee;
+  font-size: 14px;
+}
+
+.telemetry-warning span {
+  line-height: 1.5;
+}
+
 .hero-time,
 .section-note {
   color: var(--text-muted);

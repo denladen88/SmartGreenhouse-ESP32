@@ -7,6 +7,9 @@ import type { AiDecisionRecord, AutomationOverview, AutomationRule, PlantProfile
 
 type MetricTone = 'ok' | 'attention' | 'neutral';
 
+// Firmware publishes telemetry every 3 minutes; allow two missed publishes before declaring it stale.
+const TELEMETRY_STALE_AFTER_MS = 2 * 3 * 60 * 1000;
+
 interface MetricCardProps {
   label: string; value: number | null; suffix: string; color: string; precision: number;
   history: (number | null)[]; target?: string; tone?: MetricTone; status?: string;
@@ -40,11 +43,11 @@ function SectionHeader({ kicker, title, note }: { kicker: string; title: string;
 }
 
 function formatRuntime(runtimeMs: number | undefined, measuredAt: string | undefined, nowMs: number) {
-  if (!runtimeMs || runtimeMs <= 0) return 'Зараз не працює';
-
   const sampleTime = measuredAt ? Date.parse(measuredAt) : Number.NaN;
-  const sampleAgeMs = Number.isFinite(sampleTime) ? Math.max(0, nowMs - sampleTime) : 0;
-  const isFresh = sampleAgeMs <= 5 * 60 * 1000;
+  const sampleAgeMs = Number.isFinite(sampleTime) ? nowMs - sampleTime : Number.NaN;
+  if (!Number.isFinite(sampleAgeMs) || sampleAgeMs < 0 || sampleAgeMs > TELEMETRY_STALE_AFTER_MS) return 'Немає актуальних даних';
+  if (!runtimeMs || runtimeMs <= 0) return 'Зараз не працює';
+  const isFresh = sampleAgeMs <= TELEMETRY_STALE_AFTER_MS;
   const totalSeconds = Math.floor((runtimeMs + (isFresh ? sampleAgeMs : 0)) / 1000);
   const days = Math.floor(totalSeconds / 86400);
   const hours = Math.floor((totalSeconds % 86400) / 3600);
@@ -132,29 +135,41 @@ export function DashboardScreen() {
   const fallbackReason = decision?.reason || 'Пояснення зʼявиться після наступного циклу автоматики.';
   const powerValue = (power: number) => power > 0 ? `${power}/255 · ${Math.round(power / 2.55)}%` : 'Вимкнено';
   const latestSampleTime = latest?.timestamp ? Date.parse(latest.timestamp) : Number.NaN;
-  const telemetryFresh = Number.isFinite(latestSampleTime) && nowMs - latestSampleTime <= 5 * 60 * 1000;
+  const sampleAgeMs = nowMs - latestSampleTime;
+  const telemetryFresh = Number.isFinite(latestSampleTime) && sampleAgeMs >= 0 && sampleAgeMs <= TELEMETRY_STALE_AFTER_MS;
+  const telemetryStatusReady = !latestQuery.isLoading;
+  const displayState = (state: ReturnType<typeof rangeState>) => latest && !telemetryFresh
+    ? { tone: 'neutral' as const, status: 'Дані застаріли' }
+    : state;
   const isRunning = (runtimeMs: number | undefined) => telemetryFresh && (runtimeMs ?? 0) > 0;
   const actuators = decision ? [
-    { name: 'Насос поливу', value: isRunning(latest?.pumpRuntimeMs) ? 'Увімкнено' : 'Вимкнено', active: isRunning(latest?.pumpRuntimeMs), runtime: formatRuntime(latest?.pumpRuntimeMs, latest?.timestamp, nowMs), reason: decision.pumpReason || fallbackReason },
-    { name: 'Фітолампа', value: isRunning(latest?.lightRuntimeMs) ? powerValue(decision.lightBrightness) : 'Вимкнено', active: isRunning(latest?.lightRuntimeMs), runtime: formatRuntime(latest?.lightRuntimeMs, latest?.timestamp, nowMs), reason: decision.lightReason || fallbackReason },
-    { name: 'Нагрівач ґрунту', value: isRunning(latest?.soilHeaterRuntimeMs) ? powerValue(decision.soilHeaterPower) : 'Вимкнено', active: isRunning(latest?.soilHeaterRuntimeMs), runtime: formatRuntime(latest?.soilHeaterRuntimeMs, latest?.timestamp, nowMs), reason: decision.soilHeaterReason || fallbackReason },
-    { name: 'Нагрівач повітря', value: isRunning(latest?.airHeaterRuntimeMs) ? powerValue(decision.airHeaterPower) : 'Вимкнено', active: isRunning(latest?.airHeaterRuntimeMs), runtime: formatRuntime(latest?.airHeaterRuntimeMs, latest?.timestamp, nowMs), reason: decision.airHeaterReason || fallbackReason },
-    { name: 'Витяжка', value: isRunning(latest?.exhaustFanRuntimeMs) ? 'Увімкнено' : 'Вимкнено', active: isRunning(latest?.exhaustFanRuntimeMs), runtime: formatRuntime(latest?.exhaustFanRuntimeMs, latest?.timestamp, nowMs), reason: decision.exhaustFanReason || fallbackReason },
-    { name: 'Циркуляція', value: isRunning(latest?.fanRuntimeMs) ? 'Увімкнено' : 'Вимкнено', active: isRunning(latest?.fanRuntimeMs), runtime: formatRuntime(latest?.fanRuntimeMs, latest?.timestamp, nowMs), reason: decision.fanReason || fallbackReason },
+    { name: 'Насос поливу', value: !telemetryFresh ? 'Невідомо' : isRunning(latest?.pumpRuntimeMs) ? 'Увімкнено' : 'Вимкнено', active: isRunning(latest?.pumpRuntimeMs), runtime: formatRuntime(latest?.pumpRuntimeMs, latest?.timestamp, nowMs), reason: decision.pumpReason || fallbackReason },
+    { name: 'Фітолампа', value: !telemetryFresh ? 'Невідомо' : isRunning(latest?.lightRuntimeMs) ? powerValue(decision.lightBrightness) : 'Вимкнено', active: isRunning(latest?.lightRuntimeMs), runtime: formatRuntime(latest?.lightRuntimeMs, latest?.timestamp, nowMs), reason: decision.lightReason || fallbackReason },
+    { name: 'Нагрівач ґрунту', value: !telemetryFresh ? 'Невідомо' : isRunning(latest?.soilHeaterRuntimeMs) ? powerValue(decision.soilHeaterPower) : 'Вимкнено', active: isRunning(latest?.soilHeaterRuntimeMs), runtime: formatRuntime(latest?.soilHeaterRuntimeMs, latest?.timestamp, nowMs), reason: decision.soilHeaterReason || fallbackReason },
+    { name: 'Нагрівач повітря', value: !telemetryFresh ? 'Невідомо' : isRunning(latest?.airHeaterRuntimeMs) ? powerValue(decision.airHeaterPower) : 'Вимкнено', active: isRunning(latest?.airHeaterRuntimeMs), runtime: formatRuntime(latest?.airHeaterRuntimeMs, latest?.timestamp, nowMs), reason: decision.airHeaterReason || fallbackReason },
+    { name: 'Витяжка', value: !telemetryFresh ? 'Невідомо' : isRunning(latest?.exhaustFanRuntimeMs) ? 'Увімкнено' : 'Вимкнено', active: isRunning(latest?.exhaustFanRuntimeMs), runtime: formatRuntime(latest?.exhaustFanRuntimeMs, latest?.timestamp, nowMs), reason: decision.exhaustFanReason || fallbackReason },
+    { name: 'Циркуляція', value: !telemetryFresh ? 'Невідомо' : isRunning(latest?.fanRuntimeMs) ? 'Увімкнено' : 'Вимкнено', active: isRunning(latest?.fanRuntimeMs), runtime: formatRuntime(latest?.fanRuntimeMs, latest?.timestamp, nowMs), reason: decision.fanReason || fallbackReason },
   ] : [];
 
   return <ScrollView style={styles.container} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={latestQuery.isFetching || historyQuery.isFetching} onRefresh={refresh} />}>
     <View style={styles.hero}><Text style={styles.kicker}>SMART GREENHOUSE · LIVE</Text><Text style={styles.heroTitle}>{profile?.plantName || 'Огляд теплиці'}</Text>
       <Text style={styles.heroText}>{profile?.growthStage ? `Етап: ${profile.growthStage}` : 'Моніторинг середовища та автоматики'}</Text>
-      <Text style={[styles.healthBadge, attentionCount ? styles.healthAttention : styles.healthOk]}>{attentionCount ? `${attentionCount} показники поза ціллю` : 'Ключові показники в нормі'}</Text>
+      <Text style={[styles.healthBadge, telemetryStatusReady ? (!telemetryFresh ? styles.healthOffline : attentionCount ? styles.healthAttention : styles.healthOk) : null]}>{!telemetryStatusReady ? 'Перевіряємо зв’язок…' : !telemetryFresh ? 'Телеметрія не надходить' : attentionCount ? `${attentionCount} показники поза ціллю` : 'Ключові показники в нормі'}</Text>
       <Text style={styles.updatedAt}>Оновлено {latest?.timestamp ? new Date(latest.timestamp).toLocaleString('uk-UA') : '—'}</Text></View>
+
+    {telemetryStatusReady && !telemetryFresh ? <View accessibilityRole="alert" style={styles.telemetryWarning}>
+      <Text style={styles.telemetryWarningTitle}>{latest ? 'Дані теплиці застаріли' : 'Теплиця ще не передавала дані'}</Text>
+      <Text style={styles.telemetryWarningText}>{latest
+        ? `Останні показники отримано ${new Date(latest.timestamp).toLocaleString('uk-UA')}. Дані не оновлюються понад 6 хвилин. Перевірте живлення пристрою та його зв’язок із брокером.`
+        : 'Показників ще немає. Перевірте живлення пристрою та його зв’язок із брокером.'}</Text>
+    </View> : null}
 
     <SectionHeader kicker="Середовище" title="Поточні показники" note="Тренд за 24 години" />
     <View style={styles.grid}>
-      <MetricCard label="Температура повітря" value={latest?.temperatureC ?? null} suffix="°C" color="#ef6c4d" precision={1} history={extractSeries(history, (t) => t.temperatureC)} target={profile ? `${profile.tempMinC.toFixed(0)}–${profile.tempMaxC.toFixed(0)}°C` : undefined} {...tempState} />
-      <MetricCard label="Вологість повітря" value={latest?.humidityPct ?? null} suffix="%" color="#3498db" precision={1} history={extractSeries(history, (t) => t.humidityPct)} target={profile ? `${profile.humidityMinPct.toFixed(0)}–${profile.humidityMaxPct.toFixed(0)}%` : undefined} {...humidityState} />
-      <MetricCard label="Вологість ґрунту" value={latest?.soilMoisturePct ?? null} suffix="%" color="#5b9d49" precision={0} history={extractSeries(history, (t) => t.soilMoisturePct)} target={profile ? `${profile.soilMoistureMinPct.toFixed(0)}–${profile.soilMoistureMaxPct.toFixed(0)}%` : undefined} {...soilState} />
-      <MetricCard label="Температура ґрунту" value={latest?.soilTempC ?? null} suffix="°C" color="#b96d32" precision={1} history={extractSeries(history, (t) => t.soilTempC)} target={profile ? `${profile.soilTempMinC.toFixed(1)}–${profile.soilTempMaxC.toFixed(1)}°C` : undefined} {...soilTempState} />
+      <MetricCard label="Температура повітря" value={latest?.temperatureC ?? null} suffix="°C" color="#ef6c4d" precision={1} history={extractSeries(history, (t) => t.temperatureC)} target={profile ? `${profile.tempMinC.toFixed(0)}–${profile.tempMaxC.toFixed(0)}°C` : undefined} {...displayState(tempState)} />
+      <MetricCard label="Вологість повітря" value={latest?.humidityPct ?? null} suffix="%" color="#3498db" precision={1} history={extractSeries(history, (t) => t.humidityPct)} target={profile ? `${profile.humidityMinPct.toFixed(0)}–${profile.humidityMaxPct.toFixed(0)}%` : undefined} {...displayState(humidityState)} />
+      <MetricCard label="Вологість ґрунту" value={latest?.soilMoisturePct ?? null} suffix="%" color="#5b9d49" precision={0} history={extractSeries(history, (t) => t.soilMoisturePct)} target={profile ? `${profile.soilMoistureMinPct.toFixed(0)}–${profile.soilMoistureMaxPct.toFixed(0)}%` : undefined} {...displayState(soilState)} />
+      <MetricCard label="Температура ґрунту" value={latest?.soilTempC ?? null} suffix="°C" color="#b96d32" precision={1} history={extractSeries(history, (t) => t.soilTempC)} target={profile ? `${profile.soilTempMinC.toFixed(1)}–${profile.soilTempMaxC.toFixed(1)}°C` : undefined} {...displayState(soilTempState)} />
       <MetricCard label="Освітленість" value={latest?.lux ?? null} suffix=" lx" color="#e9a820" precision={0} history={extractSeries(history, (t) => t.lux)} target={profile ? `${profile.dailyLightHoursTarget.toFixed(1)} год/добу` : undefined} status="Добова ціль" />
       <MetricCard label="Тиск" value={latest?.pressureHpa ?? null} suffix=" hPa" color="#7786a3" precision={0} history={extractSeries(history, (t) => t.pressureHpa)} status="Довідково" />
     </View>
@@ -187,7 +202,8 @@ const styles = StyleSheet.create({
   kicker: { color: '#287c54', fontSize: 10, fontWeight: '800', letterSpacing: 1.2 },
   heroTitle: { fontSize: 28, fontWeight: '800', color: '#1f2924', marginTop: 4 }, heroText: { color: '#64706a', marginTop: 4 },
   healthBadge: { alignSelf: 'flex-start', overflow: 'hidden', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, marginTop: 14, fontSize: 12, fontWeight: '700' },
-  healthOk: { color: '#26734d', backgroundColor: '#e9f7ef' }, healthAttention: { color: '#a95d00', backgroundColor: '#fff3df' },
+  healthOk: { color: '#26734d', backgroundColor: '#e9f7ef' }, healthAttention: { color: '#a95d00', backgroundColor: '#fff3df' }, healthOffline: { color: '#fff', backgroundColor: '#b3261e' },
+  telemetryWarning: { padding: 14, borderWidth: 1, borderColor: '#e8aaa5', borderLeftWidth: 4, borderLeftColor: '#b3261e', borderRadius: 12, backgroundColor: '#fff0ee', marginBottom: 18 }, telemetryWarningTitle: { color: '#76231e', fontSize: 14, fontWeight: '800' }, telemetryWarningText: { color: '#76231e', fontSize: 12, lineHeight: 18, marginTop: 5 },
   updatedAt: { color: '#7a847f', fontSize: 11, marginTop: 8 },
   sectionHeader: { marginTop: 4, marginBottom: 12 }, sectionTitle: { color: '#1f2924', fontSize: 21, fontWeight: '700', marginTop: 2 }, sectionNote: { color: '#7a847f', fontSize: 11, marginTop: 3 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between', marginBottom: 28 },
