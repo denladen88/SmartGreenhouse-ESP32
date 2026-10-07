@@ -45,8 +45,25 @@ public:
   bool isSoilHeaterOn() const { return _soilHeaterPower > 0; }
   bool isAirHeaterOn() const { return _airHeaterPower > 0; }
 
+  // Фактичний час БЕЗПЕРЕРВНОЇ роботи, а не час від останнього MQTT-
+  // підтвердження. Нуль означає, що актуатор зараз вимкнений. esp_timer
+  // використовується замість millis(), щоб лічильник не скидався кожні ~49 діб.
+  uint64_t pumpRuntimeMs() const;
+  uint64_t fanRuntimeMs() const;
+  uint64_t exhaustFanRuntimeMs() const;
+  uint64_t lightRuntimeMs() const;
+  uint64_t soilHeaterRuntimeMs() const;
+  uint64_t airHeaterRuntimeMs() const;
+
+  // Змінюється тільки при фактичному переході on/off. main.cpp використовує
+  // ревізію, щоб негайно опублікувати новий стан, не чекаючи планового тіку.
+  uint32_t stateRevision() const { return _stateRevision.load(); }
+
 private:
   void applyFanOutput(); // пише FAN_PIN = isFanOn(); викликати після зміни _fanRequested або _airHeaterPower
+  void updateFanRuntime(bool wasOn);
+  static uint64_t monotonicMs();
+  static uint64_t continuousRuntimeMs(bool active, uint64_t startMs);
 
   // Незалежне від loop() апаратне вимкнення помпи через PUMP_RUN_DURATION_MS.
   // Причина: MqttService::reconnect() — блокуючий виклик з loop(), і його
@@ -72,9 +89,11 @@ private:
   // ШІМ. stateField/startMs — посилання на конкретне приватне поле
   // (_lightBrightness/_lightStartMs тощо) цього актуатора.
   void applyClampedPwm(uint8_t requested, uint8_t maxValue, int pwmChannel,
-                        unsigned long& startMs, uint8_t& stateField, const char* label);
+                        unsigned long& confirmationMs, uint64_t& continuousStartMs,
+                        uint8_t& stateField, const char* label);
 
   std::atomic<bool> _pumpOn{false}; // читається/пишеться і з loop() (задача Arduino), і з callback'у _pumpFailsafeTimer (окрема FreeRTOS-задача esp_timer)
+  std::atomic<uint32_t> _stateRevision{0};
   bool _fanRequested = false; // останній явний setFan(); НЕ обов'язково фактичний стан піна — див. isFanOn()
   bool _exhaustFanOn = false;
   uint8_t _lightBrightness = 0;
@@ -87,4 +106,11 @@ private:
   unsigned long _lightStartMs = 0;       // millis() моменту останнього підтвердження світла
   unsigned long _soilHeaterStartMs = 0;  // millis() моменту останнього підтвердження нагрівача ґрунту
   unsigned long _airHeaterStartMs = 0;   // millis() моменту останнього підтвердження нагрівача повітря
+
+  uint64_t _pumpContinuousStartMs = 0;
+  uint64_t _fanContinuousStartMs = 0;
+  uint64_t _exhaustFanContinuousStartMs = 0;
+  uint64_t _lightContinuousStartMs = 0;
+  uint64_t _soilHeaterContinuousStartMs = 0;
+  uint64_t _airHeaterContinuousStartMs = 0;
 };

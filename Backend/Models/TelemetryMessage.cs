@@ -16,4 +16,10 @@ public record TelemetryMessage(
     // інакше телеметрія від ще не перепрошитого пристрою мовчки виглядала б
     // завжди невалідною й вимкнула б керування поливом/просушкою до рефлешу.
     [property: JsonPropertyName("soil_valid")] bool? SoilValid,
-    [property: JsonPropertyName("soil_temp_c")] double? SoilTempC);
+    [property: JsonPropertyName("soil_temp_c")] double? SoilTempC,
+    [property: JsonPropertyName("pump_runtime_ms")] long PumpRuntimeMs,
+    [property: JsonPropertyName("fan_runtime_ms")] long FanRuntimeMs,
+    [property: JsonPropertyName("exhaust_fan_runtime_ms")] long ExhaustFanRuntimeMs,
+    [property: JsonPropertyName("light_runtime_ms")] long LightRuntimeMs,
+    [property: JsonPropertyName("soil_heater_runtime_ms")] long SoilHeaterRuntimeMs,
+    [property: JsonPropertyName("air_heater_runtime_ms")] long AirHeaterRuntimeMs);

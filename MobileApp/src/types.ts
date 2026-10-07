@@ -14,6 +14,12 @@ export interface TelemetryRecord {
   soilRaw: number;
   soilMoisturePct: number | null;
   soilTempC: number | null;
+  pumpRuntimeMs: number;
+  fanRuntimeMs: number;
+  exhaustFanRuntimeMs: number;
+  lightRuntimeMs: number;
+  soilHeaterRuntimeMs: number;
+  airHeaterRuntimeMs: number;
 }
 
 export interface AiDecisionRecord {

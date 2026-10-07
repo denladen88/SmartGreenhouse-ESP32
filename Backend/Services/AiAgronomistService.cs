@@ -65,6 +65,35 @@ public class AiAgronomistService : BackgroundService
         return factor > 0 ? Math.Max(1, (int)Math.Round(factor * 255)) : 0;
     }
 
+    private static int ApplyRuntimePowerBoost(int basePower, long runtimeMs, int maxPower,
+        int boostAfterMinutes, int boostStepMinutes, int boostStepPower)
+    {
+        if (basePower <= 0 || maxPower <= basePower || runtimeMs < 0 ||
+            boostAfterMinutes <= 0 || boostStepMinutes <= 0 || boostStepPower <= 0)
+        {
+            return Math.Clamp(basePower, 0, Math.Max(0, maxPower));
+        }
+
+        var boostAfterMs = TimeSpan.FromMinutes(boostAfterMinutes).TotalMilliseconds;
+        if (runtimeMs < boostAfterMs)
+        {
+            return Math.Min(basePower, maxPower);
+        }
+
+        var boostStepMs = TimeSpan.FromMinutes(boostStepMinutes).TotalMilliseconds;
+        var steps = 1L + (long)((runtimeMs - boostAfterMs) / boostStepMs);
+        var boosted = (long)basePower + steps * boostStepPower;
+        return (int)Math.Min(boosted, maxPower);
+    }
+
+    private static string FormatRuntime(long runtimeMs)
+    {
+        var duration = TimeSpan.FromMilliseconds(Math.Max(0, runtimeMs));
+        return duration.TotalHours >= 1
+            ? $"{(int)duration.TotalHours} год {duration.Minutes} хв"
+            : $"{Math.Max(1, duration.Minutes)} хв";
+    }
+
     private readonly ILogger<AiAgronomistService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly GeminiOptions _geminiOptions;
@@ -754,6 +783,13 @@ public class AiAgronomistService : BackgroundService
             .Select(t => t.SoilTempC)
             .FirstOrDefaultAsync(stoppingToken);
 
+        var latestActuatorRuntimes = await db.Telemetries
+            .OrderByDescending(t => t.Timestamp)
+            .Select(t => new { t.SoilHeaterRuntimeMs, t.AirHeaterRuntimeMs })
+            .FirstOrDefaultAsync(stoppingToken);
+        var soilHeaterRuntimeMs = latestActuatorRuntimes?.SoilHeaterRuntimeMs ?? 0;
+        var airHeaterRuntimeMs = latestActuatorRuntimes?.AirHeaterRuntimeMs ?? 0;
+
         var latestTemp = recentTemps.Count > 0 ? (double?)recentTemps[0] : null;
         var latestHumidity = recentHumidity.Count > 0 ? (double?)recentHumidity[0] : null;
         var airTempTargetC = profile.TempMaxC > profile.TempMinC
@@ -982,9 +1018,16 @@ public class AiAgronomistService : BackgroundService
         }
         else
         {
-            var heatingPower = recoveryState.SoilHeatingActive
+            var proportionalHeatingPower = recoveryState.SoilHeatingActive
                 ? ProportionalPower(soilTempTargetC - soilTemp, _agronomistOptions.SoilHeaterFullPowerDeficitC)
                 : 0;
+            var heatingPower = ApplyRuntimePowerBoost(
+                proportionalHeatingPower,
+                soilHeaterRuntimeMs,
+                _agronomistOptions.SoilHeaterMaxPower,
+                _agronomistOptions.HeaterBoostAfterMinutes,
+                _agronomistOptions.HeaterBoostStepMinutes,
+                _agronomistOptions.HeaterBoostStepPower);
             var dryingPower = recoveryState.SoilDryingActive && soilPoints.Count > 0 && hasCeiling
                 ? LimitedProportionalPower(
                     soilPoints[^1] - soilMoistureTargetPct,
@@ -998,6 +1041,11 @@ public class AiAgronomistService : BackgroundService
             if (heatingPower > 0)
             {
                 activeReasons.Add($"підігрів ґрунту {soilTemp:0.#}→{soilTempTargetC:0.#}°C ({heatingPower}/255)");
+                if (heatingPower > proportionalHeatingPower)
+                {
+                    activeReasons.Add($"підсилення після {FormatRuntime(soilHeaterRuntimeMs)} безперервної роботи " +
+                        $"({proportionalHeatingPower}→{heatingPower}/255)");
+                }
             }
             if (dryingPower > 0)
             {
@@ -1051,9 +1099,16 @@ public class AiAgronomistService : BackgroundService
         }
         else
         {
-            var heatingPower = recoveryState.AirHeatingActive
+            var proportionalHeatingPower = recoveryState.AirHeatingActive
                 ? ProportionalPower(airTempTargetC - airTemp, _agronomistOptions.AirHeaterFullPowerDeficitC)
                 : 0;
+            var heatingPower = ApplyRuntimePowerBoost(
+                proportionalHeatingPower,
+                airHeaterRuntimeMs,
+                _agronomistOptions.AirHeaterMaxPower,
+                _agronomistOptions.HeaterBoostAfterMinutes,
+                _agronomistOptions.HeaterBoostStepMinutes,
+                _agronomistOptions.HeaterBoostStepPower);
             var dryingPower = recoveryState.AirDryingActive && latestHumidity is { } humidity
                 ? LimitedProportionalPower(
                     humidity - airHumidityTargetPct,
@@ -1067,6 +1122,11 @@ public class AiAgronomistService : BackgroundService
             if (heatingPower > 0)
             {
                 activeReasons.Add($"підігрів повітря {airTemp:0.#}→{airTempTargetC:0.#}°C ({heatingPower}/255)");
+                if (heatingPower > proportionalHeatingPower)
+                {
+                    activeReasons.Add($"підсилення після {FormatRuntime(airHeaterRuntimeMs)} безперервної роботи " +
+                        $"({proportionalHeatingPower}→{heatingPower}/255)");
+                }
             }
             if (dryingPower > 0 && latestHumidity is { } activeHumidity)
             {

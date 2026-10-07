@@ -54,14 +54,14 @@ public class AutomationController : ControllerBase
                 "Підігріває кореневу зону або мʼяко просушує надто вологий ґрунт.",
                 $"Температура ґрунту нижча за {Target(profile?.SoilTempMinC, "°C")}; або останні {SustainedReadings} показники вологості вищі за {Target(profile?.SoilMoistureMaxPct, "%")}. Потужність пропорційна відхиленню.",
                 $"На середній цілі: температура {MidpointTarget(profile?.SoilTempMinC, profile?.SoilTempMaxC, "°C")}, вологість {MidpointTarget(profile?.SoilMoistureMinPct, profile?.SoilMoistureMaxPct, "%")}. Верхня межа {Target(profile?.SoilTempMaxC, "°C")} завжди вимикає нагрів.",
-                $"Жорстка межа температури та ліміт потужності {_options.SoilHeaterMaxPower}/255; ESP32 вимикає нагрівач без повторних команд."),
+                $"Жорстка межа температури та ліміт потужності {_options.SoilHeaterMaxPower}/255; після {_options.HeaterBoostAfterMinutes} хв безперервного нагріву потужність зростає на {_options.HeaterBoostStepPower}/255 кожні {_options.HeaterBoostStepMinutes} хв, доки ціль не досягнута; ESP32 вимикає нагрівач без повторних команд."),
             new(
                 "air-heater",
                 "Нагрівач повітря",
                 "Підігріває повітря або знижує відносну вологість без витяжки тепла назовні.",
                 $"Останні {SustainedReadings} температури нижчі за {Target(profile?.TempMinC, "°C")}; або останні {SustainedReadings} значення вологості вищі за {Target(profile?.HumidityMaxPct, "%")}. Потужність пропорційна відхиленню.",
                 $"На середній цілі: температура {MidpointTarget(profile?.TempMinC, profile?.TempMaxC, "°C")}, вологість {MidpointTarget(profile?.HumidityMinPct, profile?.HumidityMaxPct, "%")}. При активному охолодженні або на {Target(profile?.TempMaxC, "°C")} нагрів блокується.",
-                $"Ліміт потужності {_options.AirHeaterMaxPower}/255; циркуляційний вентилятор вмикається разом із нагрівачем."),
+                $"Ліміт потужності {_options.AirHeaterMaxPower}/255; після {_options.HeaterBoostAfterMinutes} хв безперервного нагріву потужність зростає на {_options.HeaterBoostStepPower}/255 кожні {_options.HeaterBoostStepMinutes} хв, доки ціль не досягнута; циркуляційний вентилятор вмикається разом із нагрівачем."),
             new(
                 "exhaust",
                 "Витяжка",

@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { useApiClient } from '../api/hooks';
 import { Sparkline } from '../components/Sparkline';
 import type { AiDecisionRecord, AutomationOverview, PlantProfile, TelemetryRecord, WateringTodaySummary } from '../types';
@@ -58,9 +59,32 @@ function sourceLabel(source: string | undefined) {
   return 'Локальна автоматика';
 }
 
-interface ActuatorCardProps { name: string; value: string; active: boolean; reason: string }
+function formatRuntime(runtimeMs: number | undefined, measuredAt: string | undefined, nowMs: number) {
+  if (!runtimeMs || runtimeMs <= 0) return 'Зараз не працює';
 
-function ActuatorCard({ name, value, active, reason }: ActuatorCardProps) {
+  const sampleTime = measuredAt ? Date.parse(measuredAt) : Number.NaN;
+  const sampleAgeMs = Number.isFinite(sampleTime) ? Math.max(0, nowMs - sampleTime) : 0;
+  // Не домальовуємо час нескінченно, якщо пристрій/бекенд зник: після 5 хв
+  // показуємо останній підтверджений runtime як приблизний.
+  const isFresh = sampleAgeMs <= 5 * 60 * 1000;
+  const totalSeconds = Math.floor((runtimeMs + (isFresh ? sampleAgeMs : 0)) / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts = days > 0
+    ? [`${days} д`, `${hours} год`, `${minutes} хв`]
+    : hours > 0
+      ? [`${hours} год`, `${minutes} хв`]
+      : minutes > 0
+        ? [`${minutes} хв`, `${seconds} с`]
+        : [`${seconds} с`];
+  return `${isFresh ? 'Безперервно' : 'Останнє значення ≈'} ${parts.join(' ')}`;
+}
+
+interface ActuatorCardProps { name: string; value: string; active: boolean; reason: string; runtime: string }
+
+function ActuatorCard({ name, value, active, reason, runtime }: ActuatorCardProps) {
   return (
     <article className={`actuator-card ${active ? 'actuator-active' : ''}`}>
       <div className="actuator-head">
@@ -68,6 +92,7 @@ function ActuatorCard({ name, value, active, reason }: ActuatorCardProps) {
         <span className="actuator-name">{name}</span>
         <span className={`actuator-value ${active ? 'actuator-value-active' : ''}`}>{value}</span>
       </div>
+      <div className="actuator-runtime">{runtime}</div>
       <p>{reason}</p>
     </article>
   );
@@ -75,6 +100,11 @@ function ActuatorCard({ name, value, active, reason }: ActuatorCardProps) {
 
 export function DashboardPage() {
   const api = useApiClient();
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const latestQuery = useQuery({
     queryKey: ['telemetry', 'latest'],
     queryFn: () => api.get<TelemetryRecord>('/api/telemetry/latest', { notFoundAsNull: true }),
@@ -132,13 +162,16 @@ export function DashboardPage() {
   const attentionCount = [tempState, humidityState, soilState, soilTempState].filter((s) => s.tone === 'attention').length;
   const fallbackReason = decision?.reason || 'Пояснення зʼявиться після наступного циклу автоматики.';
   const powerValue = (power: number) => power > 0 ? `${power}/255 · ${Math.round(power / 2.55)}%` : 'Вимкнено';
+  const latestSampleTime = latest?.timestamp ? Date.parse(latest.timestamp) : Number.NaN;
+  const telemetryFresh = Number.isFinite(latestSampleTime) && nowMs - latestSampleTime <= 5 * 60 * 1000;
+  const isRunning = (runtimeMs: number | undefined) => telemetryFresh && (runtimeMs ?? 0) > 0;
   const actuators = decision ? [
-    { name: 'Насос поливу', value: decision.pumpOn ? 'Увімкнено' : 'Вимкнено', active: decision.pumpOn, reason: decision.pumpReason || fallbackReason },
-    { name: 'Фітолампа', value: powerValue(decision.lightBrightness), active: decision.lightBrightness > 0, reason: decision.lightReason || fallbackReason },
-    { name: 'Нагрівач ґрунту', value: powerValue(decision.soilHeaterPower), active: decision.soilHeaterPower > 0, reason: decision.soilHeaterReason || fallbackReason },
-    { name: 'Нагрівач повітря', value: powerValue(decision.airHeaterPower), active: decision.airHeaterPower > 0, reason: decision.airHeaterReason || fallbackReason },
-    { name: 'Витяжка', value: decision.exhaustFanOn ? 'Увімкнено' : 'Вимкнено', active: decision.exhaustFanOn, reason: decision.exhaustFanReason || fallbackReason },
-    { name: 'Циркуляція', value: decision.fanOn ? 'Увімкнено' : 'Вимкнено', active: decision.fanOn, reason: decision.fanReason || fallbackReason },
+    { name: 'Насос поливу', value: isRunning(latest?.pumpRuntimeMs) ? 'Увімкнено' : 'Вимкнено', active: isRunning(latest?.pumpRuntimeMs), runtime: formatRuntime(latest?.pumpRuntimeMs, latest?.timestamp, nowMs), reason: decision.pumpReason || fallbackReason },
+    { name: 'Фітолампа', value: isRunning(latest?.lightRuntimeMs) ? powerValue(decision.lightBrightness) : 'Вимкнено', active: isRunning(latest?.lightRuntimeMs), runtime: formatRuntime(latest?.lightRuntimeMs, latest?.timestamp, nowMs), reason: decision.lightReason || fallbackReason },
+    { name: 'Нагрівач ґрунту', value: isRunning(latest?.soilHeaterRuntimeMs) ? powerValue(decision.soilHeaterPower) : 'Вимкнено', active: isRunning(latest?.soilHeaterRuntimeMs), runtime: formatRuntime(latest?.soilHeaterRuntimeMs, latest?.timestamp, nowMs), reason: decision.soilHeaterReason || fallbackReason },
+    { name: 'Нагрівач повітря', value: isRunning(latest?.airHeaterRuntimeMs) ? powerValue(decision.airHeaterPower) : 'Вимкнено', active: isRunning(latest?.airHeaterRuntimeMs), runtime: formatRuntime(latest?.airHeaterRuntimeMs, latest?.timestamp, nowMs), reason: decision.airHeaterReason || fallbackReason },
+    { name: 'Витяжка', value: isRunning(latest?.exhaustFanRuntimeMs) ? 'Увімкнено' : 'Вимкнено', active: isRunning(latest?.exhaustFanRuntimeMs), runtime: formatRuntime(latest?.exhaustFanRuntimeMs, latest?.timestamp, nowMs), reason: decision.exhaustFanReason || fallbackReason },
+    { name: 'Циркуляція', value: isRunning(latest?.fanRuntimeMs) ? 'Увімкнено' : 'Вимкнено', active: isRunning(latest?.fanRuntimeMs), runtime: formatRuntime(latest?.fanRuntimeMs, latest?.timestamp, nowMs), reason: decision.fanReason || fallbackReason },
   ] : [];
 
   return (

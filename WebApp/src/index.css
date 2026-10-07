@@ -581,6 +581,13 @@ button.secondary {
 
 .actuator-value-active { color: var(--success); }
 
+.actuator-runtime {
+  margin: 7px 0 0 18px;
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .actuator-card p {
   margin: 10px 0 0 18px;
   color: var(--text-muted);

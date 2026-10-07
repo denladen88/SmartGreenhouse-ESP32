@@ -206,6 +206,16 @@ void loop() {
   bool mqttUp = mqtt.update(wifiUp);
   actuators.update(); // failsafe-перевірка кожного актуатора щоцикл, незалежно від таймерів
 
+  // Стан актуатора важливіший за плановий 3-хвилинний інтервал сенсорів:
+  // при фактичному on/off одразу шлемо телеметрію, щоб dashboard показував
+  // безперервний runtime навіть для короткого імпульсу помпи.
+  static uint32_t lastActuatorRevision = actuators.stateRevision();
+  const uint32_t actuatorRevision = actuators.stateRevision();
+  if (actuatorRevision != lastActuatorRevision) {
+    lastActuatorRevision = actuatorRevision;
+    mqttPublishTimer.expire();
+  }
+
   // Перша телеметрія одразу після появи MQTT, а не через повний
   // MQTT_PUBLISH_INTERVAL_MS: на фронті "з'явився зв'язок" форсуємо тік таймера.
   static bool wasMqttUp = false;
@@ -251,7 +261,7 @@ void loop() {
 
   if (mqttPublishTimer.elapsed()) {
     if (wifiUp) {
-      mqtt.publishTelemetry(lastSensorData);
+      mqtt.publishTelemetry(lastSensorData, actuators);
     } else {
       Serial.println("[MQTT] Пропуск публікації: немає Wi-Fi.");
     }

@@ -82,6 +82,15 @@ public class AiAgronomistOptions
     // блок живлення не перевірено на тривалий режим на повній потужності.
     public int AirHeaterMaxPower { get; set; } = 255;
 
+    // Якщо температурна ціль все ще не досягнута після безперервної роботи
+    // нагрівача, контролер додає HeaterBoostStepPower кожні
+    // HeaterBoostStepMinutes. Підсилення діє лише на режим добору температури
+    // (не на просушку) і ніколи не обходить *HeaterMaxPower чи температурну
+    // стелю. Нуль/від'ємне значення вимикає відповідну частину механізму.
+    public int HeaterBoostAfterMinutes { get; set; } = 20;
+    public int HeaterBoostStepMinutes { get; set; } = 10;
+    public int HeaterBoostStepPower { get; set; } = 25;
+
     // За якого перевищення середини діапазону відносної вологості осушення йде
     // на повній потужності. Max запускає цикл, середина його завершує.
     public double AirHeaterDryingFullPowerExcessPct { get; set; } = 15.0;

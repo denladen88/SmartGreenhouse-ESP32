@@ -35,10 +35,9 @@ MqttService::MqttService()
 void MqttService::begin() {
   _mqttClient.setServer(MQTT_BROKER_IP, MQTT_BROKER_PORT);
   _mqttClient.setCallback(handleMessage);
-  // 512 замість дефолтних 256: топік + заголовок MQTT з'їдають ~25 Б, а повна
-  // телеметрія (усі валідні поля) підбирається до ~230 Б — за замовчуванням
-  // publish() міг мовчки повертати false і губити зразок без ретраю.
-  _mqttClient.setBufferSize(512);
+  // 1024 замість дефолтних 256: окрім сенсорів payload містить шість 64-бітних
+  // runtime актуаторів; менший MQTT-буфер міг би мовчки відхилити publish().
+  _mqttClient.setBufferSize(1024);
   // Стеля busy-wait CONNACK у PubSubClient::connect(). connect() блокуючий і
   // викликається з loop(), тож ця стеля напряму обмежує, наскільки reconnect
   // до недоступного/повільного брокера підвішує failsafe-таймери. Значення й
@@ -164,7 +163,7 @@ bool MqttService::isConnected() {
   return _mqttClient.connected();
 }
 
-void MqttService::publishTelemetry(const SensorData& data) {
+void MqttService::publishTelemetry(const SensorData& data, const ActuatorService& actuators) {
   if (!_mqttClient.connected()) {
     return;
   }
@@ -204,7 +203,16 @@ void MqttService::publishTelemetry(const SensorData& data) {
     doc["soil_temp_c"] = roundf(data.soilTempC * 100.0f) / 100.0f;
   }
 
-  char payload[512];
+  // Окремі лічильники безперервної роботи не скидаються повторними MQTT-
+  // підтвердженнями. 0 = актуатор зараз вимкнений, >0 = фактичний runtime.
+  doc["pump_runtime_ms"] = actuators.pumpRuntimeMs();
+  doc["fan_runtime_ms"] = actuators.fanRuntimeMs();
+  doc["exhaust_fan_runtime_ms"] = actuators.exhaustFanRuntimeMs();
+  doc["light_runtime_ms"] = actuators.lightRuntimeMs();
+  doc["soil_heater_runtime_ms"] = actuators.soilHeaterRuntimeMs();
+  doc["air_heater_runtime_ms"] = actuators.airHeaterRuntimeMs();
+
+  char payload[768];
   size_t len = serializeJson(doc, payload, sizeof(payload));
 
   if (_mqttClient.publish(MQTT_TELEMETRY_TOPIC, payload, len)) {

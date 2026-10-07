@@ -1,6 +1,7 @@
 #pragma once
 #include <WiFiClient.h>
 #include <PubSubClient.h>
+#include "ActuatorService.h"
 #include "NonBlockingTimer.h"
 #include "SensorService.h"
 
@@ -39,7 +40,7 @@ public:
   bool update(bool wifiUp);
 
   bool isConnected();
-  void publishTelemetry(const SensorData& data);
+  void publishTelemetry(const SensorData& data, const ActuatorService& actuators);
 
   // Реєструє обробник вхідних команд з MQTT_COMMANDS_TOPIC. Викликати до
   // begin(). PubSubClient вимагає звичайний вказівник на функцію (не

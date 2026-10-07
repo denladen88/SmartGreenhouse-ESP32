@@ -100,7 +100,8 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
         _logger.LogInformation(
             "Telemetry received: DeviceId={DeviceId} UptimeMs={UptimeMs} Temperature={TemperatureC} " +
             "Humidity={HumidityPct} Pressure={PressureHpa} Lux={Lux} SoilRaw={SoilRaw} SoilMoisturePct={SoilMoisturePct} " +
-            "SoilTempC={SoilTempC}",
+            "SoilTempC={SoilTempC} RuntimeMs=[pump:{PumpRuntimeMs}, fan:{FanRuntimeMs}, exhaust:{ExhaustRuntimeMs}, " +
+            "light:{LightRuntimeMs}, soil-heater:{SoilHeaterRuntimeMs}, air-heater:{AirHeaterRuntimeMs}]",
             telemetry.DeviceId, telemetry.UptimeMs,
             FormatOrNA(telemetry.TemperatureC, "C"),
             FormatOrNA(telemetry.HumidityPct, "%"),
@@ -108,7 +109,9 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
             FormatOrNA(telemetry.Lux),
             telemetry.SoilRaw,
             FormatOrNA(telemetry.SoilMoisturePct, "%"),
-            FormatOrNA(telemetry.SoilTempC, "C"));
+            FormatOrNA(telemetry.SoilTempC, "C"),
+            telemetry.PumpRuntimeMs, telemetry.FanRuntimeMs, telemetry.ExhaustFanRuntimeMs,
+            telemetry.LightRuntimeMs, telemetry.SoilHeaterRuntimeMs, telemetry.AirHeaterRuntimeMs);
 
         try
         {
@@ -144,7 +147,13 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
                 SoilRaw = telemetry.SoilRaw,
                 SoilMoisturePct = telemetry.SoilMoisturePct,
                 SoilValid = telemetry.SoilValid ?? true,
-                SoilTempC = telemetry.SoilTempC
+                SoilTempC = telemetry.SoilTempC,
+                PumpRuntimeMs = Math.Max(0, telemetry.PumpRuntimeMs),
+                FanRuntimeMs = Math.Max(0, telemetry.FanRuntimeMs),
+                ExhaustFanRuntimeMs = Math.Max(0, telemetry.ExhaustFanRuntimeMs),
+                LightRuntimeMs = Math.Max(0, telemetry.LightRuntimeMs),
+                SoilHeaterRuntimeMs = Math.Max(0, telemetry.SoilHeaterRuntimeMs),
+                AirHeaterRuntimeMs = Math.Max(0, telemetry.AirHeaterRuntimeMs)
             };
             db.Telemetries.Add(record);
 

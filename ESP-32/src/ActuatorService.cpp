@@ -10,7 +10,10 @@ void ActuatorService::pumpFailsafeCallback(void* arg) {
   // MqttService::reconnect(). Пишемо пін і атомарний прапорець напряму, без
   // виклику setPump(false) (щоб не чіпати _pumpStartMs з чужої задачі).
   digitalWrite(PUMP_RELAY_PIN, LOW);
-  static_cast<ActuatorService*>(arg)->_pumpOn = false;
+  auto* service = static_cast<ActuatorService*>(arg);
+  if (service->_pumpOn.exchange(false)) {
+    service->_stateRevision.fetch_add(1);
+  }
 }
 
 void ActuatorService::begin() {
@@ -89,8 +92,10 @@ void ActuatorService::setPump(bool on) {
   // з on=true — інакше повторні/підтверджувальні MQTT-команди "pump_on"
   // безкінечно відкладали б аварійне вимкнення, зводячи нанівець весь сенс
   // захисного ліміту PUMP_MAX_RUNTIME_MS.
-  if (on && !_pumpOn) {
+  const bool wasOn = _pumpOn.load();
+  if (on && !wasOn) {
     _pumpStartMs = millis();
+    _pumpContinuousStartMs = monotonicMs();
     // Апаратний таймер — головний захист (спрацює навіть якщо loop() застряг
     // довше PUMP_RUN_DURATION_MS у блокуючому MQTT-reconnect, див. коментар
     // біля _pumpFailsafeTimer в ActuatorService.h); checkFailsafe() у
@@ -106,6 +111,9 @@ void ActuatorService::setPump(bool on) {
   }
   _pumpOn = on;
   digitalWrite(PUMP_RELAY_PIN, on ? HIGH : LOW);
+  if (wasOn != on) {
+    _stateRevision.fetch_add(1);
+  }
 }
 
 void ActuatorService::setFan(bool on) {
@@ -118,10 +126,12 @@ void ActuatorService::setFan(bool on) {
   // FAN_MAX_RUNTIME_MS стає не "макс. безперервна робота", а "макс. час
   // БЕЗ підтвердження від бекенда" — вентилятор гаситься, лише якщо бекенд
   // реально замовк і не надіслав жодної команди довше цього ліміту.
+  const bool wasOn = isFanOn();
   if (on) {
     _fanStartMs = millis();
   }
   _fanRequested = on;
+  updateFanRuntime(wasOn);
   applyFanOutput();
 }
 
@@ -130,30 +140,45 @@ void ActuatorService::setExhaustFan(bool on) {
   // поки бекенд підтверджує рішення щотіку — таймер оновлюється на кожен
   // виклик з on=true, не лише на переході OFF->ON. На відміну від setFan(),
   // тут немає жодного зв'язку з іншими актуаторами — просте незалежне реле.
+  const bool wasOn = _exhaustFanOn;
   if (on) {
     _exhaustFanStartMs = millis();
   }
+  if (on && !wasOn) {
+    _exhaustFanContinuousStartMs = monotonicMs();
+  }
   _exhaustFanOn = on;
   digitalWrite(EXHAUST_FAN_PIN, on ? HIGH : LOW);
+  if (wasOn != on) {
+    _stateRevision.fetch_add(1);
+  }
 }
 
 void ActuatorService::setLight(uint8_t brightness) {
-  applyClampedPwm(brightness, LIGHT_MAX_BRIGHTNESS, LED_PWM_CHANNEL, _lightStartMs, _lightBrightness, "СВІТЛО");
+  applyClampedPwm(brightness, LIGHT_MAX_BRIGHTNESS, LED_PWM_CHANNEL,
+                  _lightStartMs, _lightContinuousStartMs, _lightBrightness, "СВІТЛО");
 }
 
 void ActuatorService::setSoilHeater(uint8_t power) {
-  applyClampedPwm(power, SOIL_HEATER_MAX_POWER, SOIL_HEATER_PWM_CHANNEL, _soilHeaterStartMs, _soilHeaterPower, "ҐРУНТ. НАГРІВАЧ");
+  applyClampedPwm(power, SOIL_HEATER_MAX_POWER, SOIL_HEATER_PWM_CHANNEL,
+                  _soilHeaterStartMs, _soilHeaterContinuousStartMs,
+                  _soilHeaterPower, "ҐРУНТ. НАГРІВАЧ");
 }
 
 void ActuatorService::setAirHeater(uint8_t power) {
-  applyClampedPwm(power, AIR_HEATER_MAX_POWER, AIR_HEATER_PWM_CHANNEL, _airHeaterStartMs, _airHeaterPower, "ПОВІТР. НАГРІВАЧ");
+  const bool fanWasOn = isFanOn();
+  applyClampedPwm(power, AIR_HEATER_MAX_POWER, AIR_HEATER_PWM_CHANNEL,
+                  _airHeaterStartMs, _airHeaterContinuousStartMs,
+                  _airHeaterPower, "ПОВІТР. НАГРІВАЧ");
   // Обдув без вентилятора не має сенсу — тепло застоюється біля елемента,
   // датчик його не бачить. Вентилятор і нагрівач — один фізичний блок.
+  updateFanRuntime(fanWasOn);
   applyFanOutput();
 }
 
 void ActuatorService::applyClampedPwm(uint8_t requested, uint8_t maxValue, int pwmChannel,
-                                       unsigned long& startMs, uint8_t& stateField, const char* label) {
+                                       unsigned long& confirmationMs, uint64_t& continuousStartMs,
+                                       uint8_t& stateField, const char* label) {
   // Апаратний захист (LIGHT_MAX_BRIGHTNESS/SOIL_HEATER_MAX_POWER/AIR_HEATER_MAX_POWER
   // у Config.h) — не довіряємо, що бекенд чи ручний override завжди пришле
   // безпечне значення.
@@ -165,12 +190,69 @@ void ActuatorService::applyClampedPwm(uint8_t requested, uint8_t maxValue, int p
   // кожну команду "увімкнено" (не лише перехід off->on), бо очікується
   // безперервна робота з періодичним підтвердженням від бекенда.
   if (requested > 0) {
-    startMs = millis();
+    confirmationMs = millis();
+  }
+  const bool wasOn = stateField > 0;
+  const bool isOn = requested > 0;
+  if (isOn && !wasOn) {
+    continuousStartMs = monotonicMs();
   }
   stateField = requested;
   ledcWrite(pwmChannel, requested);
+  if (wasOn != isOn) {
+    _stateRevision.fetch_add(1);
+  }
 }
 
 void ActuatorService::applyFanOutput() {
   digitalWrite(FAN_PIN, isFanOn() ? HIGH : LOW);
+}
+
+void ActuatorService::updateFanRuntime(bool wasOn) {
+  const bool nowOn = isFanOn();
+  if (nowOn && !wasOn) {
+    _fanContinuousStartMs = monotonicMs();
+  }
+  if (wasOn != nowOn) {
+    _stateRevision.fetch_add(1);
+  }
+}
+
+uint64_t ActuatorService::monotonicMs() {
+  return static_cast<uint64_t>(esp_timer_get_time()) / 1000ULL;
+}
+
+uint64_t ActuatorService::continuousRuntimeMs(bool active, uint64_t startMs) {
+  if (!active) {
+    return 0;
+  }
+
+  // 1 мс одразу після переходу on відрізняє активний актуатор від вимкненого
+  // навіть у телеметрії, опублікованій у тому самому циклі loop().
+  const uint64_t elapsedMs = monotonicMs() - startMs;
+  return elapsedMs > 0 ? elapsedMs : 1;
+}
+
+uint64_t ActuatorService::pumpRuntimeMs() const {
+  return continuousRuntimeMs(_pumpOn.load(), _pumpContinuousStartMs);
+}
+
+uint64_t ActuatorService::fanRuntimeMs() const {
+  return continuousRuntimeMs(isFanOn(), _fanContinuousStartMs);
+}
+
+uint64_t ActuatorService::exhaustFanRuntimeMs() const {
+  return continuousRuntimeMs(_exhaustFanOn, _exhaustFanContinuousStartMs);
+}
+
+uint64_t ActuatorService::lightRuntimeMs() const {
+  return continuousRuntimeMs(_lightBrightness > 0, _lightContinuousStartMs);
+}
+
+uint64_t ActuatorService::soilHeaterRuntimeMs() const {
+  return continuousRuntimeMs(_soilHeaterPower > 0, _soilHeaterContinuousStartMs);
+}
+
+uint64_t ActuatorService::airHeaterRuntimeMs() const {
+  return continuousRuntimeMs(_airHeaterPower > 0, _airHeaterContinuousStartMs);
 }
