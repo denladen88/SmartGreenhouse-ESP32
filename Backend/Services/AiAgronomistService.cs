@@ -927,9 +927,12 @@ public class AiAgronomistService : BackgroundService
             ? hour >= _agronomistOptions.NightRestStartHour || hour < _agronomistOptions.NightRestEndHour
             : hour >= _agronomistOptions.NightRestStartHour && hour < _agronomistOptions.NightRestEndHour;
         // Без BH1750 (Lux == null) поведінка як раніше — вважаємо, що темно.
-        var needsAmbientRecheck = latestLux is not null &&
+        // AmbientLuxRecheckMinutes = 0: датчик екранований від лампи, тож її
+        // власний внесок у показ малий і його достатньо брати як є.
+        var ambientRecheckEnabled = _agronomistOptions.AmbientLuxRecheckMinutes > 0;
+        var needsAmbientRecheck = ambientRecheckEnabled && latestLux is not null &&
             cleanLuxAgeMinutes > _agronomistOptions.AmbientLuxRecheckMinutes;
-        var ambientLux = cleanLux ?? latestLux ?? 0;
+        var ambientLux = ambientRecheckEnabled ? cleanLux ?? latestLux ?? 0 : latestLux ?? 0;
 
         int lightBrightness;
         string lightReason;

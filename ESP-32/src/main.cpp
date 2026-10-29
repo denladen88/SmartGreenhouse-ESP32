@@ -124,7 +124,9 @@ void setup() {
   mqtt.begin();
 
   server.on("/capture", HTTP_GET, [](AsyncWebServerRequest* request) {
-    if (isNight) {
+    // Увімкнена фітолампа = світло для кадру, навіть якщо BH1750 (екранований
+    // від лампи, дивиться на природне світло) показує "ніч".
+    if (isNight && !actuators.isLightOn()) {
       request->send(204); // ніч — фото немає (без тіла відповіді)
       return;
     }
