@@ -4,14 +4,15 @@
 #include <functional>
 #include "esp_timer.h"
 
-// Керує помпою (реле), вентилятором циркуляції (реле), витяжкою (реле,
-// незалежна), grow-світлом (один діод через LED-драйвер струму, ШІМ-сигнал
+// Керує помпою (реле), вентилятором циркуляції (реле), grow-світлом (один діод через LED-драйвер струму, ШІМ-сигнал
 // димування) та нагрівачами ґрунту й повітря (окремі ШІМ-канали через
 // MOSFET-модулі — див. Config.h).
 // Вентилятор циркуляції і повітряний нагрівач — один фізичний блок
 // (вентилятор+PTC-радіатор): вентилятор лишається увімкненим, поки нагрівач
 // активний, незалежно від останньої явної команди setFan() — див.
-// applyFanOutput(). Витяжка (setExhaustFan) ні з чим не пов'язана.
+// applyFanOutput().
+// Вентилятор радіатора LED (LED_FAN_PIN) не має власного сетера — його стан
+// повністю випливає зі світла, див. applyLedFanOutput().
 class ActuatorService {
 public:
   ActuatorService();
@@ -26,8 +27,7 @@ public:
 
   void setPump(bool on);
   void setFan(bool on);               // явний запит на вентиляцію; фактичний пін — див. isFanOn()
-  void setExhaustFan(bool on);        // витяжка; незалежна від setFan()/setAirHeater()
-  void setLight(uint8_t brightness); // 0 = вимкнено; обрізається до LIGHT_MAX_BRIGHTNESS (25% ШІМ), а не 255
+  void setLight(uint8_t brightness); // 0 = вимкнено; обрізається до LIGHT_MAX_BRIGHTNESS (зараз 255 — без обмеження)
   void setSoilHeater(uint8_t power);  // 0 = вимкнено; обрізається до SOIL_HEATER_MAX_POWER
   void setAirHeater(uint8_t power);   // 0 = вимкнено; обрізається до AIR_HEATER_MAX_POWER; ненульова потужність тримає вентилятор увімкненим
 
@@ -40,8 +40,8 @@ public:
 
   bool isPumpOn() const { return _pumpOn; }
   bool isFanOn() const { return _fanRequested || _airHeaterPower > 0; } // фактичний стан FAN_PIN, не лише останній setFan()
-  bool isExhaustFanOn() const { return _exhaustFanOn; }
   bool isLightOn() const { return _lightBrightness > 0; }
+  bool isLedFanOn() const { return _ledFanOn; }
   bool isSoilHeaterOn() const { return _soilHeaterPower > 0; }
   bool isAirHeaterOn() const { return _airHeaterPower > 0; }
 
@@ -50,7 +50,6 @@ public:
   // використовується замість millis(), щоб лічильник не скидався кожні ~49 діб.
   uint64_t pumpRuntimeMs() const;
   uint64_t fanRuntimeMs() const;
-  uint64_t exhaustFanRuntimeMs() const;
   uint64_t lightRuntimeMs() const;
   uint64_t soilHeaterRuntimeMs() const;
   uint64_t airHeaterRuntimeMs() const;
@@ -62,6 +61,7 @@ public:
 private:
   void applyFanOutput(); // пише FAN_PIN = isFanOn(); викликати після зміни _fanRequested або _airHeaterPower
   void updateFanRuntime(bool wasOn);
+  void applyLedFanOutput(); // пише LED_FAN_PIN: світло горить або ще йде доохолодження LED_FAN_RUNON_MS
   static uint64_t monotonicMs();
   static uint64_t continuousRuntimeMs(bool active, uint64_t startMs);
 
@@ -77,7 +77,7 @@ private:
   static void pumpFailsafeCallback(void* arg);
   esp_timer_handle_t _pumpFailsafeTimer = nullptr;
 
-  // Спільна форма для 6 практично ідентичних перевірок у update() (лише поле
+  // Спільна форма для 5 практично ідентичних перевірок у update() (лише поле
   // active, таймер startMs, ліміт maxRuntimeMs, лейбл логу й "вимикач"
   // різняться) — щоб додавання нового актуатора не означало копіювати ще один
   // 5-рядковий блок і ризикувати одруком у назві таймера/константи.
@@ -95,21 +95,20 @@ private:
   std::atomic<bool> _pumpOn{false}; // читається/пишеться і з loop() (задача Arduino), і з callback'у _pumpFailsafeTimer (окрема FreeRTOS-задача esp_timer)
   std::atomic<uint32_t> _stateRevision{0};
   bool _fanRequested = false; // останній явний setFan(); НЕ обов'язково фактичний стан піна — див. isFanOn()
-  bool _exhaustFanOn = false;
   uint8_t _lightBrightness = 0;
+  bool _ledFanOn = false;
+  unsigned long _lightOffMs = 0; // millis() моменту, коли світло перейшло on->off (відлік доохолодження)
   uint8_t _soilHeaterPower = 0;
   uint8_t _airHeaterPower = 0;
 
   unsigned long _pumpStartMs = 0;        // millis() моменту останнього вмикання помпи
   unsigned long _fanStartMs = 0;         // millis() моменту останнього явного запиту вентиляції
-  unsigned long _exhaustFanStartMs = 0;  // millis() моменту останнього підтвердження витяжки
   unsigned long _lightStartMs = 0;       // millis() моменту останнього підтвердження світла
   unsigned long _soilHeaterStartMs = 0;  // millis() моменту останнього підтвердження нагрівача ґрунту
   unsigned long _airHeaterStartMs = 0;   // millis() моменту останнього підтвердження нагрівача повітря
 
   uint64_t _pumpContinuousStartMs = 0;
   uint64_t _fanContinuousStartMs = 0;
-  uint64_t _exhaustFanContinuousStartMs = 0;
   uint64_t _lightContinuousStartMs = 0;
   uint64_t _soilHeaterContinuousStartMs = 0;
   uint64_t _airHeaterContinuousStartMs = 0;

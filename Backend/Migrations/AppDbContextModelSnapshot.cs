@@ -30,13 +30,6 @@ namespace SmartGreenhouse.Backend.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<bool>("ExhaustFanOn")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("ExhaustFanReason")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
                     b.Property<bool>("FanOn")
                         .HasColumnType("INTEGER");
 
@@ -95,9 +88,6 @@ namespace SmartGreenhouse.Backend.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
-
-                    b.Property<bool>("AirCoolingActive")
-                        .HasColumnType("INTEGER");
 
                     b.Property<bool>("AirDryingActive")
                         .HasColumnType("INTEGER");
@@ -241,9 +231,6 @@ namespace SmartGreenhouse.Backend.Migrations
                     b.Property<string>("DeviceId")
                         .IsRequired()
                         .HasColumnType("TEXT");
-
-                    b.Property<long>("ExhaustFanRuntimeMs")
-                        .HasColumnType("INTEGER");
 
                     b.Property<long>("FanRuntimeMs")
                         .HasColumnType("INTEGER");

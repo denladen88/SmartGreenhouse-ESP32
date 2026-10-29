@@ -22,7 +22,6 @@ public class TelemetryRecord
     public double? SoilTempC { get; set; }
     public long PumpRuntimeMs { get; set; }
     public long FanRuntimeMs { get; set; }
-    public long ExhaustFanRuntimeMs { get; set; }
     public long LightRuntimeMs { get; set; }
     public long SoilHeaterRuntimeMs { get; set; }
     public long AirHeaterRuntimeMs { get; set; }

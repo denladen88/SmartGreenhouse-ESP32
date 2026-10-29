@@ -30,10 +30,10 @@ void ActuatorService::begin() {
 
   pinMode(PUMP_RELAY_PIN, OUTPUT);
   pinMode(FAN_PIN, OUTPUT);
-  pinMode(EXHAUST_FAN_PIN, OUTPUT);
+  pinMode(LED_FAN_PIN, OUTPUT);
   digitalWrite(PUMP_RELAY_PIN, LOW);
   digitalWrite(FAN_PIN, LOW);
-  digitalWrite(EXHAUST_FAN_PIN, LOW);
+  digitalWrite(LED_FAN_PIN, LOW);
 
   ledcSetup(LED_PWM_CHANNEL, LED_PWM_FREQ_HZ, LED_PWM_RESOLUTION_BITS);
   ledcAttachPin(LIGHT_PIN, LED_PWM_CHANNEL);
@@ -59,15 +59,17 @@ void ActuatorService::update() {
   }
 
   // Той самий захист для помпи (аварійне вимкнення понад PUMP_MAX_RUNTIME_MS,
-  // незалежно від того, хто й чому її увімкнув), вентилятора, витяжки, світла й обох
+  // незалежно від того, хто й чому її увімкнув), вентилятора, світла й обох
   // нагрівачів (*_MAX_RUNTIME_MS — див. Config.h), лише через спільний
-  // checkFailsafe() замість шести окремо виписаних копій.
+  // checkFailsafe() замість п'яти окремо виписаних копій.
   checkFailsafe(_pumpOn, _pumpStartMs, PUMP_MAX_RUNTIME_MS, "ПОМПА", [this] { setPump(false); });
   checkFailsafe(_fanRequested, _fanStartMs, FAN_MAX_RUNTIME_MS, "ВЕНТИЛЯТОР", [this] { setFan(false); });
-  checkFailsafe(_exhaustFanOn, _exhaustFanStartMs, EXHAUST_FAN_MAX_RUNTIME_MS, "ВИТЯЖКА", [this] { setExhaustFan(false); });
   checkFailsafe(_lightBrightness > 0, _lightStartMs, LIGHT_MAX_RUNTIME_MS, "СВІТЛО", [this] { setLight(0); });
   checkFailsafe(_soilHeaterPower > 0, _soilHeaterStartMs, SOIL_HEATER_MAX_RUNTIME_MS, "НАГРІВАЧ", [this] { setSoilHeater(0); });
   checkFailsafe(_airHeaterPower > 0, _airHeaterStartMs, AIR_HEATER_MAX_RUNTIME_MS, "НАГРІВАЧ ПОВІТРЯ", [this] { setAirHeater(0); });
+
+  // Вимикає вентилятор LED, коли спливло доохолодження після вимкнення світла.
+  applyLedFanOutput();
 }
 
 void ActuatorService::checkFailsafe(bool active, unsigned long startMs, unsigned long maxRuntimeMs,
@@ -81,7 +83,6 @@ void ActuatorService::checkFailsafe(bool active, unsigned long startMs, unsigned
 void ActuatorService::emergencyStopAll() {
   setPump(false);
   setFan(false);
-  setExhaustFan(false);
   setLight(0);
   setSoilHeater(0);
   setAirHeater(0);
@@ -135,28 +136,14 @@ void ActuatorService::setFan(bool on) {
   applyFanOutput();
 }
 
-void ActuatorService::setExhaustFan(bool on) {
-  // Та сама Pattern B, що й у вентилятора циркуляції: безперервна робота,
-  // поки бекенд підтверджує рішення щотіку — таймер оновлюється на кожен
-  // виклик з on=true, не лише на переході OFF->ON. На відміну від setFan(),
-  // тут немає жодного зв'язку з іншими актуаторами — просте незалежне реле.
-  const bool wasOn = _exhaustFanOn;
-  if (on) {
-    _exhaustFanStartMs = millis();
-  }
-  if (on && !wasOn) {
-    _exhaustFanContinuousStartMs = monotonicMs();
-  }
-  _exhaustFanOn = on;
-  digitalWrite(EXHAUST_FAN_PIN, on ? HIGH : LOW);
-  if (wasOn != on) {
-    _stateRevision.fetch_add(1);
-  }
-}
-
 void ActuatorService::setLight(uint8_t brightness) {
+  const bool wasOn = isLightOn();
   applyClampedPwm(brightness, LIGHT_MAX_BRIGHTNESS, LED_PWM_CHANNEL,
                   _lightStartMs, _lightContinuousStartMs, _lightBrightness, "СВІТЛО");
+  if (wasOn && !isLightOn()) {
+    _lightOffMs = millis();
+  }
+  applyLedFanOutput();
 }
 
 void ActuatorService::setSoilHeater(uint8_t power) {
@@ -186,7 +173,7 @@ void ActuatorService::applyClampedPwm(uint8_t requested, uint8_t maxValue, int p
     Serial.printf("[%s] Запит %d обрізано до безпечного максимуму %d.\n", label, requested, maxValue);
     requested = maxValue;
   }
-  // Той самий принцип, що й у вентилятора/витяжки: таймер оновлюється на
+  // Той самий принцип, що й у вентилятора: таймер оновлюється на
   // кожну команду "увімкнено" (не лише перехід off->on), бо очікується
   // безперервна робота з періодичним підтвердженням від бекенда.
   if (requested > 0) {
@@ -206,6 +193,17 @@ void ActuatorService::applyClampedPwm(uint8_t requested, uint8_t maxValue, int p
 
 void ActuatorService::applyFanOutput() {
   digitalWrite(FAN_PIN, isFanOn() ? HIGH : LOW);
+}
+
+void ActuatorService::applyLedFanOutput() {
+  // Зв'язок на рівні прошивки, як вентилятор↔повітряний нагрівач: діод без
+  // обдуву радіатора перегріється, тож не покладаємось на окрему команду
+  // бекенда. Доохолодження — бо радіатор після вимкнення ще гарячий.
+  const bool on = isLightOn() || (_ledFanOn && millis() - _lightOffMs < LED_FAN_RUNON_MS);
+  if (on != _ledFanOn) {
+    _ledFanOn = on;
+    digitalWrite(LED_FAN_PIN, on ? HIGH : LOW);
+  }
 }
 
 void ActuatorService::updateFanRuntime(bool wasOn) {
@@ -239,10 +237,6 @@ uint64_t ActuatorService::pumpRuntimeMs() const {
 
 uint64_t ActuatorService::fanRuntimeMs() const {
   return continuousRuntimeMs(isFanOn(), _fanContinuousStartMs);
-}
-
-uint64_t ActuatorService::exhaustFanRuntimeMs() const {
-  return continuousRuntimeMs(_exhaustFanOn, _exhaustFanContinuousStartMs);
 }
 
 uint64_t ActuatorService::lightRuntimeMs() const {

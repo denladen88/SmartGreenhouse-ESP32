@@ -58,23 +58,16 @@ public class AutomationController : ControllerBase
             new(
                 "air-heater",
                 "Нагрівач повітря",
-                "Підігріває повітря або знижує відносну вологість без витяжки тепла назовні.",
+                "Підігріває повітря або знижує відносну вологість.",
                 $"Останні {SustainedReadings} температури нижчі за {Target(profile?.TempMinC, "°C")}; або останні {SustainedReadings} значення вологості вищі за {Target(profile?.HumidityMaxPct, "%")}. Потужність пропорційна відхиленню.",
-                $"На середній цілі: температура {MidpointTarget(profile?.TempMinC, profile?.TempMaxC, "°C")}, вологість {MidpointTarget(profile?.HumidityMinPct, profile?.HumidityMaxPct, "%")}. При активному охолодженні або на {Target(profile?.TempMaxC, "°C")} нагрів блокується.",
+                $"На середній цілі: температура {MidpointTarget(profile?.TempMinC, profile?.TempMaxC, "°C")}, вологість {MidpointTarget(profile?.HumidityMinPct, profile?.HumidityMaxPct, "%")}. На {Target(profile?.TempMaxC, "°C")} нагрів блокується (активного охолодження в теплиці немає).",
                 $"Ліміт потужності {_options.AirHeaterMaxPower}/255; після {_options.HeaterBoostAfterMinutes} хв безперервного нагріву потужність зростає на {_options.HeaterBoostStepPower}/255 кожні {_options.HeaterBoostStepMinutes} хв, доки ціль не досягнута; циркуляційний вентилятор вмикається разом із нагрівачем."),
-            new(
-                "exhaust",
-                "Витяжка",
-                "Виводить гаряче повітря з теплиці.",
-                $"Останні {SustainedReadings} температури повітря вищі за {Target(profile?.TempMaxC, "°C")}.",
-                $"Після охолодження до середини діапазону {MidpointTarget(profile?.TempMinC, profile?.TempMaxC, "°C")}.",
-                "Стан корекції зберігається між циклами та після перезапуску бекенду."),
             new(
                 "fan",
                 "Циркуляційний вентилятор",
-                "Розподіляє нагріте або охолоджуване повітря по теплиці.",
-                "Автоматично працює разом із нагрівачем повітря або витяжкою.",
-                "Коли нагрівач повітря і витяжка вимкнені.",
+                "Розподіляє нагріте повітря по теплиці.",
+                "Автоматично працює разом із нагрівачем повітря.",
+                "Коли нагрівач повітря вимкнений.",
                 "ESP32 апаратно гарантує обдув під час роботи повітряного нагрівача.")
         };
 

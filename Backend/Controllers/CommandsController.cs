@@ -41,9 +41,8 @@ public class CommandsController : ControllerBase
 
     // [FromBody] JsonElement замість [FromBody] AiCommand: AiCommand — record із
     // не-nullable полями, тож JSON-біндер підставляв би default (false/0) для
-    // будь-якого пропущеного ключа — застарілий клієнт, що не знає про поле
-    // exhaust_fan_on (додане цим diff'ом), мовчки вимкнув би витяжку замість
-    // того, щоб лишити її як є. Читаємо сирий JSON і для кожного пропущеного
+    // будь-якого пропущеного ключа — клієнт, що шле лише частину полів, мовчки
+    // вимкнув би решту актуаторів замість того, щоб лишити їх як є. Читаємо сирий JSON і для кожного пропущеного
     // ключа підставляємо останній відомий стан актуатора — той самий
     // has*-принцип часткового оновлення, що вже є у прошивки (MqttService.h
     // CommandData), лише реалізований тут через "відсутній ключ = не чіпати".
@@ -56,7 +55,6 @@ public class CommandsController : ControllerBase
 
         bool pumpOn = ReadBool(body, "pump_on", latest?.PumpOn ?? false);
         bool fanOn = ReadBool(body, "fan_on", latest?.FanOn ?? false);
-        bool exhaustFanOn = ReadBool(body, "exhaust_fan_on", latest?.ExhaustFanOn ?? false);
         int lightBrightness = ReadInt(body, "light_brightness", latest?.LightBrightness ?? 0);
         int soilHeaterPower = ReadInt(body, "soil_heater_power", latest?.SoilHeaterPower ?? 0);
         int airHeaterPower = ReadInt(body, "air_heater_power", latest?.AirHeaterPower ?? 0);
@@ -68,20 +66,18 @@ public class CommandsController : ControllerBase
         soilHeaterPower = Math.Clamp(soilHeaterPower, 0, _agronomistOptions.SoilHeaterMaxPower);
         airHeaterPower = Math.Clamp(airHeaterPower, 0, _agronomistOptions.AirHeaterMaxPower);
 
-        var command = new AiCommand(pumpOn, fanOn, exhaustFanOn, lightBrightness, soilHeaterPower, airHeaterPower);
+        var command = new AiCommand(pumpOn, fanOn, lightBrightness, soilHeaterPower, airHeaterPower);
 
         var record = new AiDecisionRecord
         {
             PumpOn = command.PumpOn,
             FanOn = command.FanOn,
-            ExhaustFanOn = command.ExhaustFanOn,
             LightBrightness = command.LightBrightness,
             SoilHeaterPower = command.SoilHeaterPower,
             AirHeaterPower = command.AirHeaterPower,
             Source = "ManualOverride",
             PumpReason = "Стан встановлено вручну з екрана керування.",
             FanReason = "Стан встановлено вручну з екрана керування.",
-            ExhaustFanReason = "Стан встановлено вручну з екрана керування.",
             LightReason = "Яскравість встановлено вручну з екрана керування.",
             SoilHeaterReason = "Потужність встановлено вручну з екрана керування.",
             AirHeaterReason = "Потужність встановлено вручну з екрана керування.",

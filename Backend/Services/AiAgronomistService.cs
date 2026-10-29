@@ -284,14 +284,14 @@ public class AiAgronomistService : BackgroundService
     // від локального контролера чи від будь-чого іншого) — щоб примусове
     // вмикання світла для нічного фото не зачепило pump/fan і щоб потім було
     // куди повертати світло назад.
-    private async Task<(bool PumpOn, bool FanOn, bool ExhaustFanOn, int LightBrightness, int SoilHeaterPower, int AirHeaterPower)> GetLatestActuatorStateAsync(CancellationToken stoppingToken)
+    private async Task<(bool PumpOn, bool FanOn, int LightBrightness, int SoilHeaterPower, int AirHeaterPower)> GetLatestActuatorStateAsync(CancellationToken stoppingToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var latest = await db.AiDecisions.OrderByDescending(d => d.Timestamp).FirstOrDefaultAsync(stoppingToken);
         return latest is null
-            ? (false, false, false, 0, 0, 0)
-            : (latest.PumpOn, latest.FanOn, latest.ExhaustFanOn, latest.LightBrightness, latest.SoilHeaterPower, latest.AirHeaterPower);
+            ? (false, false, 0, 0, 0)
+            : (latest.PumpOn, latest.FanOn, latest.LightBrightness, latest.SoilHeaterPower, latest.AirHeaterPower);
     }
 
     // Одна повна спроба отримати кадр з ESP32-CAM. Повертає null, якщо камера
@@ -323,7 +323,7 @@ public class AiAgronomistService : BackgroundService
 
             _logger.LogInformation("No photo (likely night per ESP32) — forcing grow light on for a proper shot and retrying");
             await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
-                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.ExhaustFanOn, 255,
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, 255,
                     previousDecision.SoilHeaterPower, previousDecision.AirHeaterPower)));
 
             await Task.Delay(TimeSpan.FromSeconds(65), stoppingToken);
@@ -339,7 +339,7 @@ public class AiAgronomistService : BackgroundService
             }
 
             await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, JsonSerializer.Serialize(
-                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn, previousDecision.ExhaustFanOn,
+                new AiCommand(previousDecision.PumpOn, previousDecision.FanOn,
                     previousDecision.LightBrightness, previousDecision.SoilHeaterPower, previousDecision.AirHeaterPower)));
         }
 
@@ -473,9 +473,9 @@ public class AiAgronomistService : BackgroundService
             "range from the trend shape and actuator history above, not just a snapshot), the minimum AND maximum soil " +
             "temperature (root-zone, not air) it should be kept between, and how many hours of effective light (sun and/or " +
             "grow light combined) it needs per day. These ranges will be used directly by simple automated rules — not by " +
-            "you — to control the pump, two fans, grow light, an air heater, and a soil heating mat until your next review. " +
-            "There are two fans with distinct roles. The exhaust fan is cooling only: it vents air outward and turns on " +
-            "when air temperature is sustained above TempMaxC. The circulation fan has no independent trigger of its own " +
+            "you — to control the pump, a circulation fan, grow light, an air heater, and a soil heating mat until your next review. " +
+            "There is NO active cooling (no exhaust fan) — above TempMaxC the rules can only keep the heaters off, " +
+            "so the air may stay above TempMaxC on hot days. The circulation fan has no independent trigger of its own " +
             "— it runs automatically whenever the air heater is active (it's the heater's only airflow) and is off " +
             "otherwise, so it isn't something your ranges control directly. The air heater runs " +
             "in two modes, both proportional (no on/off jumps): temperature make-up whenever air temperature is sustained " +
@@ -623,7 +623,6 @@ public class AiAgronomistService : BackgroundService
         {
             var last = segments.Count > 0 ? segments[^1] : null;
             if (last is not null && last.Sample.PumpOn == d.PumpOn && last.Sample.FanOn == d.FanOn &&
-                last.Sample.ExhaustFanOn == d.ExhaustFanOn &&
                 last.Sample.LightBrightness == d.LightBrightness && last.Sample.SoilHeaterPower == d.SoilHeaterPower &&
                 last.Sample.AirHeaterPower == d.AirHeaterPower)
             {
@@ -637,7 +636,7 @@ public class AiAgronomistService : BackgroundService
 
         return string.Join("\n", segments.TakeLast(_agronomistOptions.DecisionHistoryCount).Select(s =>
             $"{s.Start:MM-dd HH:mm}-{s.End:HH:mm} ({s.Count}x) Pump={(s.Sample.PumpOn ? "On" : "Off")} " +
-            $"Fan={(s.Sample.FanOn ? "On" : "Off")} ExhaustFan={(s.Sample.ExhaustFanOn ? "On" : "Off")} " +
+            $"Fan={(s.Sample.FanOn ? "On" : "Off")} " +
             $"Light={s.Sample.LightBrightness} " +
             $"SoilHeater={s.Sample.SoilHeaterPower} AirHeater={s.Sample.AirHeaterPower} — {s.Sample.Reason}"));
     }
@@ -800,8 +799,6 @@ public class AiAgronomistService : BackgroundService
             ? Midpoint(profile.HumidityMinPct, profile.HumidityMaxPct)
             : profile.HumidityMaxPct;
 
-        var tempSustainedHigh = recentTemps.Count >= MinSustainedReadings &&
-            recentTemps.All(t => t > profile.TempMaxC);
         var tempSustainedLow = recentTemps.Count >= MinSustainedReadings &&
             recentTemps.All(t => t < profile.TempMinC);
         var humiditySustainedHigh = hasHumidityRange &&
@@ -815,8 +812,6 @@ public class AiAgronomistService : BackgroundService
         {
             recoveryState.AirHeatingActive = currentAirTemp < airTempTargetC &&
                 (recoveryState.AirHeatingActive || tempSustainedLow);
-            recoveryState.AirCoolingActive = currentAirTemp > airTempTargetC &&
-                (recoveryState.AirCoolingActive || tempSustainedHigh);
         }
 
         if (!hasHumidityRange)
@@ -827,21 +822,6 @@ public class AiAgronomistService : BackgroundService
         {
             recoveryState.AirDryingActive = currentHumidity > airHumidityTargetPct &&
                 (recoveryState.AirDryingActive || humiditySustainedHigh);
-        }
-
-        var exhaustFanOn = recoveryState.AirCoolingActive && latestTemp is not null;
-        string exhaustFanReason;
-        if (exhaustFanOn)
-        {
-            exhaustFanReason = $"Температура {latestTemp:0.#}°C вийшла вище {profile.TempMaxC:0.#}°C; " +
-                $"витяжка охолоджує до середньої цілі {airTempTargetC:0.#}°C.";
-        }
-        else
-        {
-            exhaustFanReason = latestTemp is { } measuredAirTemp
-                ? $"Температура {measuredAirTemp:0.#}°C не потребує активного охолодження; " +
-                  $"наступний цикл почнеться лише вище {profile.TempMaxC:0.#}°C."
-                : "Немає показників температури повітря — витяжка вимкнена.";
         }
 
         // Помпа: щонайменше два останні показники нижче мінімуму, вологість
@@ -1090,12 +1070,10 @@ public class AiAgronomistService : BackgroundService
             airHeaterPower = 0;
             airHeaterReason = "Немає показників температури повітря — нагрівач вимкнений.";
         }
-        else if (airTemp >= profile.TempMaxC || recoveryState.AirCoolingActive)
+        else if (airTemp >= profile.TempMaxC)
         {
             airHeaterPower = 0;
-            airHeaterReason = recoveryState.AirCoolingActive
-                ? $"Активне охолодження повітря до {airTempTargetC:0.#}°C — нагрівач заблоковано, щоб не протидіяти витяжці."
-                : $"Температура повітря {airTemp:0.#}°C досягла жорсткої межі {profile.TempMaxC:0.#}°C — нагрівач вимкнений.";
+            airHeaterReason = $"Температура повітря {airTemp:0.#}°C досягла жорсткої межі {profile.TempMaxC:0.#}°C — нагрівач вимкнений.";
         }
         else
         {
@@ -1150,23 +1128,17 @@ public class AiAgronomistService : BackgroundService
             airHeaterPower = _agronomistOptions.AirHeaterMaxPower;
         }
 
-        // Вентилятор циркуляції: два незалежні джерела.
-        //   1) активний повітряний нагрівач — гріти повітря без обдуву немає
-        //      сенсу (гаряче повітря стоїть біля елемента, датчик його не
-        //      "бачить", тепло не розходиться по обʼєму). ESP32 однаково
-        //      гарантує це на своєму боці (ActuatorService::applyFanOutput),
-        //      незалежно від цього прапорця.
-        //   2) активна витяжка (охолодження) — перемішує повітря по обʼєму
-        //      теплиці, поки витяжка виводить гаряче назовні, замість того щоб
-        //      витяжка тягнула лише з одного кутка.
-        var fanOn = airHeaterPower > 0 || exhaustFanOn;
-        var fanReason = airHeaterPower > 0
+        // Вентилятор циркуляції працює лише разом із повітряним нагрівачем —
+        // гріти повітря без обдуву немає сенсу (гаряче повітря стоїть біля
+        // елемента, датчик його не "бачить", тепло не розходиться по обʼєму).
+        // ESP32 однаково гарантує це на своєму боці
+        // (ActuatorService::applyFanOutput), незалежно від цього прапорця.
+        var fanOn = airHeaterPower > 0;
+        var fanReason = fanOn
             ? $"Увімкнений для розподілу тепла від нагрівача повітря ({airHeaterPower}/255)."
-            : exhaustFanOn
-                ? "Увімкнений для перемішування повітря під час роботи витяжки."
-                : "Нагрівач повітря і витяжка не працюють — циркуляція вимкнена.";
+            : "Нагрівач повітря не працює — циркуляція вимкнена.";
 
-        var reason = $"{exhaustFanReason}; {fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}; {airHeaterReason}";
+        var reason = $"{fanReason}; {pumpReason}; {lightReason}; {soilHeaterReason}; {airHeaterReason}";
 
         if (StressTestForceActuatorsOn)
         {
@@ -1174,7 +1146,6 @@ public class AiAgronomistService : BackgroundService
             // Pump is intentionally excluded: pumpOn keeps whatever the normal
             // rule above decided (i.e. stays off unless that rule says water).
             fanOn = true;
-            exhaustFanOn = true;
             lightBrightness = 255;
             soilHeaterPower = _agronomistOptions.SoilHeaterMaxPower;
             airHeaterPower = _agronomistOptions.AirHeaterMaxPower;
@@ -1187,14 +1158,12 @@ public class AiAgronomistService : BackgroundService
         {
             PumpOn = pumpOn,
             FanOn = fanOn,
-            ExhaustFanOn = exhaustFanOn,
             LightBrightness = lightBrightness,
             SoilHeaterPower = soilHeaterPower,
             AirHeaterPower = airHeaterPower,
             Source = StressTestForceActuatorsOn ? "StressTest" : "LocalController",
             PumpReason = pumpReason,
             FanReason = fanReason,
-            ExhaustFanReason = exhaustFanReason,
             LightReason = lightReason,
             SoilHeaterReason = soilHeaterReason,
             AirHeaterReason = airHeaterReason,
@@ -1210,12 +1179,12 @@ public class AiAgronomistService : BackgroundService
         // це покладаються FAN_MAX_RUNTIME_MS/помпові/нагрівача failsafe-таймери на
         // ESP32, які без повторної команди самі гасять актуатор.
         var commandPayload = JsonSerializer.Serialize(
-            new AiCommand(pumpOn, fanOn, exhaustFanOn, lightBrightness, soilHeaterPower, airHeaterPower));
+            new AiCommand(pumpOn, fanOn, lightBrightness, soilHeaterPower, airHeaterPower));
         await _mqttPublisher.PublishAsync(_mqttOptions.CommandsTopic, commandPayload);
 
         _logger.LogInformation(
-            "Local control decision: Pump={Pump} Fan={Fan} ExhaustFan={ExhaustFan} Light={Light} SoilHeater={SoilHeater} AirHeater={AirHeater} — {Reason}",
-            pumpOn ? "On" : "Off", fanOn ? "On" : "Off", exhaustFanOn ? "On" : "Off", lightBrightness, soilHeaterPower,
+            "Local control decision: Pump={Pump} Fan={Fan} Light={Light} SoilHeater={SoilHeater} AirHeater={AirHeater} — {Reason}",
+            pumpOn ? "On" : "Off", fanOn ? "On" : "Off", lightBrightness, soilHeaterPower,
             airHeaterPower, reason);
     }
 

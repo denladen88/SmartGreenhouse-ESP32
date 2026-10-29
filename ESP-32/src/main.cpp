@@ -106,9 +106,6 @@ void setup() {
     if (cmd.hasFan) {
       actuators.setFan(cmd.fanOn);
     }
-    if (cmd.hasExhaustFan) {
-      actuators.setExhaustFan(cmd.exhaustFanOn);
-    }
     if (cmd.hasLight) {
       actuators.setLight(cmd.lightBrightness);
     }

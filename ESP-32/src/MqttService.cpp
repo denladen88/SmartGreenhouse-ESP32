@@ -87,19 +87,17 @@ void MqttService::handleMessage(char* topic, uint8_t* payload, unsigned int leng
   // has* — чи ключ реально присутній у JSON (merge-семантика в обробнику).
   cmd.hasPump = !doc["pump_on"].isNull();
   cmd.hasFan = !doc["fan_on"].isNull();
-  cmd.hasExhaustFan = !doc["exhaust_fan_on"].isNull();
   cmd.hasLight = !doc["light_brightness"].isNull();
   cmd.hasSoilHeater = !doc["soil_heater_power"].isNull();
   cmd.hasAirHeater = !doc["air_heater_power"].isNull();
   cmd.pumpOn = doc["pump_on"] | false;
   cmd.fanOn = doc["fan_on"] | false;
-  cmd.exhaustFanOn = doc["exhaust_fan_on"] | false;
   cmd.lightBrightness = doc["light_brightness"] | (uint8_t)0;
   cmd.soilHeaterPower = doc["soil_heater_power"] | (uint8_t)0;
   cmd.airHeaterPower = doc["air_heater_power"] | (uint8_t)0;
 
-  Serial.printf("[MQTT] Команда: pump_on=%d, fan_on=%d, exhaust_fan_on=%d, light_brightness=%d, soil_heater_power=%d, air_heater_power=%d\n",
-                cmd.pumpOn, cmd.fanOn, cmd.exhaustFanOn, cmd.lightBrightness, cmd.soilHeaterPower, cmd.airHeaterPower);
+  Serial.printf("[MQTT] Команда: pump_on=%d, fan_on=%d, light_brightness=%d, soil_heater_power=%d, air_heater_power=%d\n",
+                cmd.pumpOn, cmd.fanOn, cmd.lightBrightness, cmd.soilHeaterPower, cmd.airHeaterPower);
 
   if (_commandHandler) {
     _commandHandler(cmd);
@@ -207,7 +205,6 @@ void MqttService::publishTelemetry(const SensorData& data, const ActuatorService
   // підтвердженнями. 0 = актуатор зараз вимкнений, >0 = фактичний runtime.
   doc["pump_runtime_ms"] = actuators.pumpRuntimeMs();
   doc["fan_runtime_ms"] = actuators.fanRuntimeMs();
-  doc["exhaust_fan_runtime_ms"] = actuators.exhaustFanRuntimeMs();
   doc["light_runtime_ms"] = actuators.lightRuntimeMs();
   doc["soil_heater_runtime_ms"] = actuators.soilHeaterRuntimeMs();
   doc["air_heater_runtime_ms"] = actuators.airHeaterRuntimeMs();

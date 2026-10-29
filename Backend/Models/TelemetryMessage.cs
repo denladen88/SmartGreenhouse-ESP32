@@ -19,7 +19,6 @@ public record TelemetryMessage(
     [property: JsonPropertyName("soil_temp_c")] double? SoilTempC,
     [property: JsonPropertyName("pump_runtime_ms")] long PumpRuntimeMs,
     [property: JsonPropertyName("fan_runtime_ms")] long FanRuntimeMs,
-    [property: JsonPropertyName("exhaust_fan_runtime_ms")] long ExhaustFanRuntimeMs,
     [property: JsonPropertyName("light_runtime_ms")] long LightRuntimeMs,
     [property: JsonPropertyName("soil_heater_runtime_ms")] long SoilHeaterRuntimeMs,
     [property: JsonPropertyName("air_heater_runtime_ms")] long AirHeaterRuntimeMs);

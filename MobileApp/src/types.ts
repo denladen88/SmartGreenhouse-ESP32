@@ -16,7 +16,6 @@ export interface TelemetryRecord {
   soilTempC: number | null;
   pumpRuntimeMs: number;
   fanRuntimeMs: number;
-  exhaustFanRuntimeMs: number;
   lightRuntimeMs: number;
   soilHeaterRuntimeMs: number;
   airHeaterRuntimeMs: number;
@@ -27,14 +26,12 @@ export interface AiDecisionRecord {
   timestamp: string;
   pumpOn: boolean;
   fanOn: boolean;
-  exhaustFanOn: boolean;
   lightBrightness: number;
   soilHeaterPower: number;
   airHeaterPower: number;
   source: 'LocalController' | 'ManualOverride' | 'StressTest' | string;
   pumpReason: string;
   fanReason: string;
-  exhaustFanReason: string;
   lightReason: string;
   soilHeaterReason: string;
   airHeaterReason: string;
@@ -45,7 +42,6 @@ export interface AiDecisionRecord {
 export interface AiCommand {
   pump_on: boolean;
   fan_on: boolean;
-  exhaust_fan_on: boolean;
   light_brightness: number;
   soil_heater_power: number;
   air_heater_power: number;
