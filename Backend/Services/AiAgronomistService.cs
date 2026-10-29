@@ -763,7 +763,7 @@ public class AiAgronomistService : BackgroundService
         var todayLightRecords = await db.Telemetries
             .Where(t => t.Timestamp >= todayStartUtc)
             .OrderBy(t => t.Timestamp)
-            .Select(t => new TelemetryRecord { Timestamp = t.Timestamp, Lux = t.Lux })
+            .Select(t => new TelemetryRecord { Timestamp = t.Timestamp, Lux = t.Lux, LightRuntimeMs = t.LightRuntimeMs })
             .ToListAsync(stoppingToken);
 
         var todayLightDecisions = await db.AiDecisions
@@ -771,10 +771,26 @@ public class AiAgronomistService : BackgroundService
             .OrderBy(d => d.Timestamp)
             .ToListAsync(stoppingToken);
 
-        var latestLux = await db.Telemetries
+        var recentLightTelemetry = await db.Telemetries
             .OrderByDescending(t => t.Timestamp)
-            .Select(t => t.Lux)
-            .FirstOrDefaultAsync(stoppingToken);
+            .Take(100)
+            .Select(t => new { t.Timestamp, t.Lux, t.LightRuntimeMs })
+            .ToListAsync(stoppingToken);
+        var latestLux = recentLightTelemetry.FirstOrDefault()?.Lux;
+
+        // Чистий (без фітолампи) вимір природного світла: лампа вимкнена і в
+        // цьому записі, і в попередньому. Одного запису мало — після вимкнення
+        // ESP32 одразу шле телеметрію зі старим показом BH1750, знятим ще при
+        // увімкненій лампі.
+        var cleanLuxIndex = Enumerable.Range(0, Math.Max(0, recentLightTelemetry.Count - 1))
+            .Cast<int?>()
+            .FirstOrDefault(i => recentLightTelemetry[i!.Value].Lux is not null &&
+                recentLightTelemetry[i.Value].LightRuntimeMs == 0 &&
+                recentLightTelemetry[i.Value + 1].LightRuntimeMs == 0);
+        var cleanLux = cleanLuxIndex is { } ci ? recentLightTelemetry[ci].Lux : null;
+        var cleanLuxAgeMinutes = cleanLuxIndex is { } ai
+            ? (DateTime.UtcNow - recentLightTelemetry[ai].Timestamp).TotalMinutes
+            : double.PositiveInfinity;
 
         var latestSoilTemp = await db.Telemetries
             .Where(t => t.SoilTempC != null)
@@ -910,7 +926,10 @@ public class AiAgronomistService : BackgroundService
         var isNightRest = _agronomistOptions.NightRestStartHour > _agronomistOptions.NightRestEndHour
             ? hour >= _agronomistOptions.NightRestStartHour || hour < _agronomistOptions.NightRestEndHour
             : hour >= _agronomistOptions.NightRestStartHour && hour < _agronomistOptions.NightRestEndHour;
-        var ambientLux = latestLux ?? 0;
+        // Без BH1750 (Lux == null) поведінка як раніше — вважаємо, що темно.
+        var needsAmbientRecheck = latestLux is not null &&
+            cleanLuxAgeMinutes > _agronomistOptions.AmbientLuxRecheckMinutes;
+        var ambientLux = cleanLux ?? latestLux ?? 0;
 
         int lightBrightness;
         string lightReason;
@@ -923,6 +942,12 @@ public class AiAgronomistService : BackgroundService
         {
             lightBrightness = 0;
             lightReason = $"Денну норму світла вже набрано: {lightHoursSoFarToday:0.#}/{profile.DailyLightHoursTarget:0.#} год — світло вимкнене.";
+        }
+        else if (needsAmbientRecheck)
+        {
+            lightBrightness = 0;
+            lightReason = "Фітолампу тимчасово вимкнено на один цикл телеметрії, щоб виміряти природне світло " +
+                $"без її впливу (перевірка щонайменше раз на {_agronomistOptions.AmbientLuxRecheckMinutes} хв).";
         }
         else if (ambientLux >= _agronomistOptions.GrowthLuxThreshold)
         {
@@ -1270,10 +1295,10 @@ public class AiAgronomistService : BackgroundService
     }
 
     // Підсумовує, скільки годин сьогодні ambient Lux (природне світло) сам по собі
-    // тримався на рівні "ефективного" ростового освітлення. На практиці grow light
-    // навіть на високій яскравості рідко піднімає покази BH1750 до GrowthLuxThreshold
-    // — тому години активної підсвітки рахує окремо EstimateGrowLightHours, а тут
-    // лише природне світло. Кожен інтервал між сусідніми точками рахується як
+    // тримався на рівні "ефективного" ростового освітлення. Точки, зняті при
+    // увімкненій фітолампі (LightRuntimeMs > 0), пропускаються: без обмеження
+    // яскравості лампа сама піднімає BH1750 вище порогу, і ці години рахувались
+    // би двічі — тут і в EstimateGrowLightHours, що рахує години підсвітки окремо. Кожен інтервал між сусідніми точками рахується як
     // "освітлений", якщо його стартова точка була вище порогу; інтервал обрізається
     // до 15 хв, щоб простій пристрою (Wi-Fi/MQTT відвалились на години) не
     // зарахувався як багатогодинне освітлення.
@@ -1284,7 +1309,7 @@ public class AiAgronomistService : BackgroundService
         for (int i = 0; i < chronologicalRecords.Count - 1; i++)
         {
             var current = chronologicalRecords[i];
-            if (!current.Lux.HasValue || current.Lux.Value < luxThreshold)
+            if (current.LightRuntimeMs > 0 || !current.Lux.HasValue || current.Lux.Value < luxThreshold)
             {
                 continue;
             }

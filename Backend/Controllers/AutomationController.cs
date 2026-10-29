@@ -45,7 +45,7 @@ public class AutomationController : ControllerBase
                 "light",
                 "Фітолампа",
                 "Добирає денну норму ефективного світла.",
-                $"Поза нічним відпочинком, отримано менше {Target(profile?.DailyLightHoursTarget, " год/добу")}, а природне світло нижче {_options.GrowthLuxThreshold:0} lx. Яскравість пропорційна дефіциту lux.",
+                $"Поза нічним відпочинком, отримано менше {Target(profile?.DailyLightHoursTarget, " год/добу")}, а природне світло нижче {_options.GrowthLuxThreshold:0} lx. Яскравість пропорційна дефіциту lux. Природне світло міряється лише при вимкненій лампі, тому щонайменше раз на {_options.AmbientLuxRecheckMinutes} хв вона гасне на один цикл телеметрії.",
                 $"Коли денну норму набрано, природне світло ≥ {_options.GrowthLuxThreshold:0} lx або настав нічний відпочинок.",
                 $"Гарантований темний період: {_options.NightRestStartHour:00}:00–{_options.NightRestEndHour:00}:00; прошивка має власний таймер безпеки."),
             new(
