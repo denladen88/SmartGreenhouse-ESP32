@@ -101,7 +101,7 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
             "Telemetry received: DeviceId={DeviceId} UptimeMs={UptimeMs} Temperature={TemperatureC} " +
             "Humidity={HumidityPct} Pressure={PressureHpa} Lux={Lux} SoilRaw={SoilRaw} SoilMoisturePct={SoilMoisturePct} " +
             "SoilTempC={SoilTempC} RuntimeMs=[pump:{PumpRuntimeMs}, fan:{FanRuntimeMs}, " +
-            "light:{LightRuntimeMs}, soil-heater:{SoilHeaterRuntimeMs}, air-heater:{AirHeaterRuntimeMs}]",
+            "light:{LightRuntimeMs}, soil-heater:{SoilHeaterRuntimeMs}, air-heater:{AirHeaterRuntimeMs}, led-fan:{LedFanRuntimeMs}]",
             telemetry.DeviceId, telemetry.UptimeMs,
             FormatOrNA(telemetry.TemperatureC, "C"),
             FormatOrNA(telemetry.HumidityPct, "%"),
@@ -111,7 +111,7 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
             FormatOrNA(telemetry.SoilMoisturePct, "%"),
             FormatOrNA(telemetry.SoilTempC, "C"),
             telemetry.PumpRuntimeMs, telemetry.FanRuntimeMs,
-            telemetry.LightRuntimeMs, telemetry.SoilHeaterRuntimeMs, telemetry.AirHeaterRuntimeMs);
+            telemetry.LightRuntimeMs, telemetry.SoilHeaterRuntimeMs, telemetry.AirHeaterRuntimeMs, telemetry.LedFanRuntimeMs);
 
         try
         {
@@ -152,7 +152,8 @@ public class MqttBackgroundService : BackgroundService, IMqttPublisher
                 FanRuntimeMs = Math.Max(0, telemetry.FanRuntimeMs),
                 LightRuntimeMs = Math.Max(0, telemetry.LightRuntimeMs),
                 SoilHeaterRuntimeMs = Math.Max(0, telemetry.SoilHeaterRuntimeMs),
-                AirHeaterRuntimeMs = Math.Max(0, telemetry.AirHeaterRuntimeMs)
+                AirHeaterRuntimeMs = Math.Max(0, telemetry.AirHeaterRuntimeMs),
+                LedFanRuntimeMs = Math.Max(0, telemetry.LedFanRuntimeMs)
             };
             db.Telemetries.Add(record);
 

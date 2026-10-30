@@ -25,4 +25,5 @@ public class TelemetryRecord
     public long LightRuntimeMs { get; set; }
     public long SoilHeaterRuntimeMs { get; set; }
     public long AirHeaterRuntimeMs { get; set; }
+    public long LedFanRuntimeMs { get; set; }
 }

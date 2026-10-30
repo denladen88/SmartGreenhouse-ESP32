@@ -2,8 +2,6 @@
 #include <Arduino.h>
 #include "Config.h"
 
-ActuatorService::ActuatorService() {}
-
 void ActuatorService::pumpFailsafeCallback(void* arg) {
   // Виконується у власній задачі esp_timer, НЕ в задачі loop() — саме тому
   // це надійно спрацює, навіть якщо loop() зараз застряг у блокуючому
@@ -24,7 +22,7 @@ void ActuatorService::begin() {
       .name = "pump_failsafe",
   };
   if (esp_timer_create(&pumpTimerArgs, &_pumpFailsafeTimer) != ESP_OK) {
-    Serial.println("[ПОМПА] УВАГА: не вдалось створити апаратний таймер захисту — лишається лише резервний перевірка в update().");
+    Serial.println("[ПОМПА] УВАГА: не вдалось створити апаратний таймер захисту — лишається лише резервна перевірка в update().");
     _pumpFailsafeTimer = nullptr;
   }
 
@@ -61,9 +59,10 @@ void ActuatorService::update() {
   // Той самий захист для помпи (аварійне вимкнення понад PUMP_MAX_RUNTIME_MS,
   // незалежно від того, хто й чому її увімкнув), вентилятора, світла й обох
   // нагрівачів (*_MAX_RUNTIME_MS — див. Config.h), лише через спільний
-  // checkFailsafe() замість п'яти окремо виписаних копій.
+  // checkFailsafe() замість шести окремо виписаних копій.
   checkFailsafe(_pumpOn, _pumpStartMs, PUMP_MAX_RUNTIME_MS, "ПОМПА", [this] { setPump(false); });
   checkFailsafe(_fanRequested, _fanStartMs, FAN_MAX_RUNTIME_MS, "ВЕНТИЛЯТОР", [this] { setFan(false); });
+  checkFailsafe(_ledFanRequested, _ledFanStartMs, LED_FAN_MAX_RUNTIME_MS, "КУЛЕР LED", [this] { setLedFan(false); });
   checkFailsafe(_lightBrightness > 0, _lightStartMs, LIGHT_MAX_RUNTIME_MS, "СВІТЛО", [this] { setLight(0); });
   checkFailsafe(_soilHeaterPower > 0, _soilHeaterStartMs, SOIL_HEATER_MAX_RUNTIME_MS, "НАГРІВАЧ", [this] { setSoilHeater(0); });
   checkFailsafe(_airHeaterPower > 0, _airHeaterStartMs, AIR_HEATER_MAX_RUNTIME_MS, "НАГРІВАЧ ПОВІТРЯ", [this] { setAirHeater(0); });
@@ -83,6 +82,7 @@ void ActuatorService::checkFailsafe(bool active, unsigned long startMs, unsigned
 void ActuatorService::emergencyStopAll() {
   setPump(false);
   setFan(false);
+  setLedFan(false);
   setLight(0);
   setSoilHeater(0);
   setAirHeater(0);
@@ -105,7 +105,7 @@ void ActuatorService::setPump(bool on) {
       esp_timer_start_once(_pumpFailsafeTimer, (int64_t)PUMP_RUN_DURATION_MS * 1000);
     }
   } else if (!on && _pumpFailsafeTimer) {
-    // Вимикаємо явно (штатний postrél завершився в update(), або emergencyStopAll) —
+    // Вимикаємо явно (штатний постріл завершився в update(), або emergencyStopAll) —
     // скасовуємо ще не спрацьований таймер, щоб він не "вимкнув" вже вимкнену
     // помпу на наступному циклі ввімкнення.
     esp_timer_stop(_pumpFailsafeTimer);
@@ -134,6 +134,17 @@ void ActuatorService::setFan(bool on) {
   _fanRequested = on;
   updateFanRuntime(wasOn);
   applyFanOutput();
+}
+
+void ActuatorService::setLedFan(bool on) {
+  // Як setFan(): таймер оновлюється на КОЖНУ команду "on", тож кулер працює,
+  // поки бекенд підтверджує охолодження, і гасне після LED_FAN_MAX_RUNTIME_MS
+  // тиші. Світло тримає кулер увімкненим незалежно від цього запиту.
+  if (on) {
+    _ledFanStartMs = millis();
+  }
+  _ledFanRequested = on;
+  applyLedFanOutput();
 }
 
 void ActuatorService::setLight(uint8_t brightness) {
@@ -199,10 +210,17 @@ void ActuatorService::applyLedFanOutput() {
   // Зв'язок на рівні прошивки, як вентилятор↔повітряний нагрівач: діод без
   // обдуву радіатора перегріється, тож не покладаємось на окрему команду
   // бекенда. Доохолодження — бо радіатор після вимкнення ще гарячий.
-  const bool on = isLightOn() || (_ledFanOn && millis() - _lightOffMs < LED_FAN_RUNON_MS);
+  // _ledFanRequested — явне охолодження теплиці (setLedFan), без світла.
+  const bool on = _ledFanRequested || isLightOn() ||
+                  (_ledFanOn && millis() - _lightOffMs < LED_FAN_RUNON_MS);
   if (on != _ledFanOn) {
+    if (on) {
+      _ledFanContinuousStartMs = monotonicMs();
+    }
     _ledFanOn = on;
     digitalWrite(LED_FAN_PIN, on ? HIGH : LOW);
+    // Кінець доохолодження теж публікується одразу, а не з плановим тіком.
+    _stateRevision.fetch_add(1);
   }
 }
 
@@ -240,7 +258,7 @@ uint64_t ActuatorService::fanRuntimeMs() const {
 }
 
 uint64_t ActuatorService::lightRuntimeMs() const {
-  return continuousRuntimeMs(_lightBrightness > 0, _lightContinuousStartMs);
+  return continuousRuntimeMs(isLightOn(), _lightContinuousStartMs);
 }
 
 uint64_t ActuatorService::soilHeaterRuntimeMs() const {
@@ -249,4 +267,8 @@ uint64_t ActuatorService::soilHeaterRuntimeMs() const {
 
 uint64_t ActuatorService::airHeaterRuntimeMs() const {
   return continuousRuntimeMs(_airHeaterPower > 0, _airHeaterContinuousStartMs);
+}
+
+uint64_t ActuatorService::ledFanRuntimeMs() const {
+  return continuousRuntimeMs(_ledFanOn, _ledFanContinuousStartMs);
 }

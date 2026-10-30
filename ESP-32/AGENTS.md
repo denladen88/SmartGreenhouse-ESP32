@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This directory contains the ESP32-S3 firmware within the SmartGreenhouse monorepo. Production code is split into service pairs: public interfaces in `include/` and implementations in `src/` (for example, `SensorService.h` and `SensorService.cpp`). `src/main.cpp` wires sensors, networking, MQTT, camera, and actuators together. Hardware constants and MQTT topics belong in `include/Config.h`; local credentials belong in the ignored `include/Secrets.h`, based on `Secrets.example.h`. Keep wiring references in `docs/` synchronized with pin changes. `test/` is reserved for PlatformIO tests.
+This directory contains the ESP32-S3 firmware within the SmartGreenhouse monorepo. Production code is split into service pairs: public interfaces in `include/` and implementations in `src/` (for example, `SensorService.h` and `SensorService.cpp`). `src/main.cpp` wires sensors, networking, MQTT, camera, and actuators together. Hardware constants and MQTT topics belong in `include/Config.h`; local credentials belong in the ignored `include/Secrets.h`, based on `Secrets.example.h`. Keep wiring references in `docs/` (`wiring-diagram.html`, `pinout.md`, `hardware.md`, `electrical-spec.md`) synchronized with pin and hardware changes.
 
 ## Build, Test, and Development Commands
 
@@ -12,7 +12,6 @@ Run commands from `ESP-32/`:
 - `pio run -t upload` — build and flash the connected board.
 - `pio run -t monitor` — open the 115200-baud serial monitor with timestamps and exception decoding.
 - `pio run -t upload -t monitor` — flash, then monitor.
-- `pio test` — run PlatformIO tests when test cases exist.
 - `pio check` — run available static analysis.
 
 Do not casually upgrade `espressif32@7.0.1`; the firmware relies on the Arduino ESP32 2.x LEDC API and N16R8 memory configuration.
@@ -23,7 +22,7 @@ Use C++17-compatible Arduino code with two-space indentation and opening braces 
 
 ## Testing Guidelines
 
-There is currently no substantive automated test suite. Every change must at least pass `pio run`; run `pio check` for logic-heavy changes. Add PlatformIO tests under `test/<feature>/test_main.cpp`. For sensor or actuator changes, document the board, observed serial output, and physical verification performed.
+There is no automated test suite. Every change must at least pass `pio run`; run `pio check` for logic-heavy changes. If tests are added, put them under `test/<feature>/test_main.cpp` and run `pio test`. For sensor or actuator changes, document the board, observed serial output, and physical verification performed.
 
 ## Commit & Pull Request Guidelines
 

@@ -9,16 +9,18 @@
 // Прапорці has* кажуть, чи поле реально було в JSON: обробник застосовує лише
 // присутні поля (merge-семантика), тож часткова команда з одним ключем більше
 // не занулює решту актуаторів. Бекенд (Backend/Models/AiCommand.cs) завжди шле
-// всі 5 полів, тож для нього поведінка не змінюється.
+// всі 6 полів, тож для нього поведінка не змінюється.
 struct CommandData {
   bool pumpOn = false;
   bool fanOn = false;
-  uint8_t lightBrightness = 0;  // 0-255, повністю замінює автоматику по BH1750
+  bool ledFanOn = false;        // кулер LED для активного охолодження (світло вмикає його й без цього)
+  uint8_t lightBrightness = 0;  // 0-255, яскравість grow-світла
   uint8_t soilHeaterPower = 0;  // 0-255, потужність ШІМ підігріву ґрунту
   uint8_t airHeaterPower = 0;   // 0-255, потужність ШІМ підігріву повітря
 
   bool hasPump = false;
   bool hasFan = false;
+  bool hasLedFan = false;
   bool hasLight = false;
   bool hasSoilHeater = false;
   bool hasAirHeater = false;
@@ -33,11 +35,9 @@ public:
   void begin();
   // Викликати кожен цикл loop(); wifiUp — результат network.update() ЦЬОГО Ж
   // проходу циклу, щоб не питати WiFi.status() вдруге за той самий стан.
-  // Повертає isConnected() одразу після оновлення (той самий стан, що й
-  // isConnected(), але без другого виклику _mqttClient.connected() у loop()).
+  // Повертає, чи є з'єднання з брокером після оновлення.
   bool update(bool wifiUp);
 
-  bool isConnected();
   void publishTelemetry(const SensorData& data, const ActuatorService& actuators);
 
   // Реєструє обробник вхідних команд з MQTT_COMMANDS_TOPIC. Викликати до

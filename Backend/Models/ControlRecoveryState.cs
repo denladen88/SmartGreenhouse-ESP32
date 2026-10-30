@@ -15,6 +15,7 @@ public class ControlRecoveryState
 
     public bool AirHeatingActive { get; set; }
     public bool AirDryingActive { get; set; }
+    public bool AirCoolingActive { get; set; }
     public bool SoilHeatingActive { get; set; }
     public bool SoilWateringActive { get; set; }
     public bool SoilDryingActive { get; set; }

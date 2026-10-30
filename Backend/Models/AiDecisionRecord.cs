@@ -11,6 +11,7 @@ public class AiDecisionRecord
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     public bool PumpOn { get; set; }
     public bool FanOn { get; set; }
+    public bool LedFanOn { get; set; }
     public int LightBrightness { get; set; }
     public int SoilHeaterPower { get; set; }
     public int AirHeaterPower { get; set; }
@@ -21,6 +22,7 @@ public class AiDecisionRecord
     public string Source { get; set; } = "LocalController";
     public string PumpReason { get; set; } = string.Empty;
     public string FanReason { get; set; } = string.Empty;
+    public string LedFanReason { get; set; } = string.Empty;
     public string LightReason { get; set; } = string.Empty;
     public string SoilHeaterReason { get; set; } = string.Empty;
     public string AirHeaterReason { get; set; } = string.Empty;

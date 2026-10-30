@@ -12,7 +12,7 @@ namespace SmartGreenhouse.Backend.Controllers;
 
 // Ручний override з мобільного застосунку. Публікує ту саму AiCommand, що й
 // AiAgronomistService.RunLocalControlAsync, і так само логує AiDecisionRecord
-// — щоб History-екран і GetLatestActuatorStateAsync лишались консистентними.
+// — щоб History-екран і наступні ручні команди бачили той самий останній стан.
 // Наступний тік локального контролера (LocalControlIntervalMinutes,
 // типово 10 хв) природно перепише це рішення своїм — override не "залипає".
 [ApiController]
@@ -55,6 +55,7 @@ public class CommandsController : ControllerBase
 
         bool pumpOn = ReadBool(body, "pump_on", latest?.PumpOn ?? false);
         bool fanOn = ReadBool(body, "fan_on", latest?.FanOn ?? false);
+        bool ledFanOn = ReadBool(body, "led_fan_on", latest?.LedFanOn ?? false);
         int lightBrightness = ReadInt(body, "light_brightness", latest?.LightBrightness ?? 0);
         int soilHeaterPower = ReadInt(body, "soil_heater_power", latest?.SoilHeaterPower ?? 0);
         int airHeaterPower = ReadInt(body, "air_heater_power", latest?.AirHeaterPower ?? 0);
@@ -66,18 +67,20 @@ public class CommandsController : ControllerBase
         soilHeaterPower = Math.Clamp(soilHeaterPower, 0, _agronomistOptions.SoilHeaterMaxPower);
         airHeaterPower = Math.Clamp(airHeaterPower, 0, _agronomistOptions.AirHeaterMaxPower);
 
-        var command = new AiCommand(pumpOn, fanOn, lightBrightness, soilHeaterPower, airHeaterPower);
+        var command = new AiCommand(pumpOn, fanOn, ledFanOn, lightBrightness, soilHeaterPower, airHeaterPower);
 
         var record = new AiDecisionRecord
         {
             PumpOn = command.PumpOn,
             FanOn = command.FanOn,
+            LedFanOn = command.LedFanOn,
             LightBrightness = command.LightBrightness,
             SoilHeaterPower = command.SoilHeaterPower,
             AirHeaterPower = command.AirHeaterPower,
             Source = "ManualOverride",
             PumpReason = "Стан встановлено вручну з екрана керування.",
             FanReason = "Стан встановлено вручну з екрана керування.",
+            LedFanReason = "Стан встановлено вручну з екрана керування.",
             LightReason = "Яскравість встановлено вручну з екрана керування.",
             SoilHeaterReason = "Потужність встановлено вручну з екрана керування.",
             AirHeaterReason = "Потужність встановлено вручну з екрана керування.",

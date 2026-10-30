@@ -20,7 +20,7 @@ export function ControlsPage() {
   const latest = latestDecisionQuery.data;
 
   const [pumpOn, setPumpOn] = useState(false);
-  const [fanOn, setFanOn] = useState(false);
+  const [coolingOn, setCoolingOn] = useState(false);
   const [lightBrightness, setLightBrightness] = useState(0);
   const [soilHeaterPower, setSoilHeaterPower] = useState(0);
   const [airHeaterPower, setAirHeaterPower] = useState(0);
@@ -29,7 +29,7 @@ export function ControlsPage() {
   useEffect(() => {
     if (latest) {
       setPumpOn(latest.pumpOn);
-      setFanOn(latest.fanOn);
+      setCoolingOn(latest.ledFanOn);
       setLightBrightness(latest.lightBrightness);
       setSoilHeaterPower(latest.soilHeaterPower);
       setAirHeaterPower(latest.airHeaterPower);
@@ -53,10 +53,13 @@ export function ControlsPage() {
     setError(null);
     mutation.mutate({
       pump_on: pumpOn,
-      fan_on: fanOn,
+      // Охолодження = обидва вентилятори без нагріву (як правило на бекенді);
+      // інакше вентилятор блоку лише обдуває нагрівач повітря.
+      fan_on: coolingOn || airHeaterPower > 0,
+      led_fan_on: coolingOn,
       light_brightness: Math.round(lightBrightness),
       soil_heater_power: Math.round(soilHeaterPower),
-      air_heater_power: Math.round(airHeaterPower),
+      air_heater_power: coolingOn ? 0 : Math.round(airHeaterPower),
     });
   };
 
@@ -71,8 +74,8 @@ export function ControlsPage() {
       </div>
 
       <div className="control-row">
-        <span>Вентилятор циркуляції (авто: увімкнений разом із нагрівачем повітря)</span>
-        <input type="checkbox" checked={fanOn} onChange={(e) => setFanOn(e.target.checked)} />
+        <span>Охолодження (обидва вентилятори, без нагріву)</span>
+        <input type="checkbox" checked={coolingOn} onChange={(e) => setCoolingOn(e.target.checked)} />
       </div>
 
       <div className="slider-block">
@@ -98,12 +101,13 @@ export function ControlsPage() {
       </div>
 
       <div className="slider-block">
-        <label>Потужність нагрівача повітря: {Math.round(airHeaterPower)}</label>
+        <label>Потужність нагрівача повітря (з вбудованим вентилятором): {Math.round(airHeaterPower)}</label>
         <input
           type="range"
           min={0}
           max={255}
-          value={airHeaterPower}
+          value={coolingOn ? 0 : airHeaterPower}
+          disabled={coolingOn}
           onChange={(e) => setAirHeaterPower(Number(e.target.value))}
         />
       </div>

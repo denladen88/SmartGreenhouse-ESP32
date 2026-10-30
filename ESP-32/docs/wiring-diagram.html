@@ -222,12 +222,13 @@
     <p class="lede">
       Карта підключень контролера теплиці (ESP32-S3-DevKitC-1) — спочатку загальний
       вигляд, потім усі GPIO, модулі керування й зовнішнє живлення, за поточним станом
-      <code>Config.h</code>. <b>Мідним кольором</b> позначено вузли, додані під час цієї
-      сесії: витяжку, комбінований блок вентилятор+радіатор і новий LED-драйвер світла.
+      <code>Config.h</code>. <b>Мідним кольором</b> позначено вузли, зв'язані між собою
+      в прошивці: блок вентилятор+PTC (вентилятор не вимикається, поки гріє PTC) і
+      світло з кулером радіатора (кулер працює, поки горить світло, і ще 2 хв після). Для охолодження теплиці обидва вентилятори вмикаються без нагрівача й світла.
     </p>
     <div class="legend">
       <div class="legend-item"><span class="swatch ink"></span> керуючий сигнал (GPIO)</div>
-      <div class="legend-item"><span class="swatch new"></span> нове цієї сесії</div>
+      <div class="legend-item"><span class="swatch new"></span> вузол, зв'язаний у прошивці</div>
       <div class="legend-item"><span class="swatch pwr"></span> підтверджена напруга живлення</div>
       <div class="legend-item"><span class="swatch gnd"></span> спільний GND</div>
     </div>
@@ -235,7 +236,7 @@
 
   <div class="section-heading">Спрощена схема</div>
   <figure class="diagram">
-    <svg viewBox="0 0 1300 1260" role="img" aria-label="Спрощена схема: ESP32-S3 у центрі, навколо сім вузлів теплиці — камера, сенсори, насос, опалення, витяжка, грілка ґрунту, світло.">
+    <svg viewBox="0 0 1300 1260" role="img" aria-label="Спрощена схема: ESP32-S3 у центрі, навколо сім вузлів теплиці — камера, сенсори, насос, опалення, кулер LED, грілка ґрунту, світло.">
 
       <circle cx="700" cy="700" r="100" class="hub-circle"/>
       <text x="700" y="694" text-anchor="middle" class="hub-title">ESP32-S3</text>
@@ -262,19 +263,20 @@
       <text x="1129" y="896" text-anchor="middle" class="node-caption">полив</text>
       <text x="1129" y="916" text-anchor="middle" class="node-gpio">GPIO47</text>
 
-      <!-- Опалення (нове) -->
+      <!-- Опалення -->
       <line x1="743" y1="790" x2="860" y2="1032" class="simple-line-new"/>
       <circle cx="891" cy="1096" r="72" class="node-circle-new"/>
       <text x="891" y="1102" text-anchor="middle" class="node-title">Опалення</text>
       <text x="891" y="1194" text-anchor="middle" class="node-caption">вентилятор + PTC</text>
       <text x="891" y="1214" text-anchor="middle" class="node-gpio">GPIO40 / 42</text>
 
-      <!-- Витяжка (нове) -->
+      <!-- Кулер радіатора LED -->
       <line x1="657" y1="790" x2="540" y2="1032" class="simple-line-new"/>
       <circle cx="509" cy="1096" r="72" class="node-circle-new"/>
-      <text x="509" y="1102" text-anchor="middle" class="node-title">Витяжка</text>
-      <text x="509" y="1194" text-anchor="middle" class="node-caption">охолодження</text>
-      <text x="509" y="1214" text-anchor="middle" class="node-gpio">GPIO38</text>
+      <text x="509" y="1090" text-anchor="middle" class="node-title">Кулер</text>
+      <text x="509" y="1114" text-anchor="middle" class="node-title">LED</text>
+      <text x="509" y="1194" text-anchor="middle" class="node-caption">обдув радіатора світла</text>
+      <text x="509" y="1214" text-anchor="middle" class="node-gpio">GPIO41</text>
 
       <!-- Грілка ґрунту -->
       <line x1="603" y1="722" x2="341" y2="782" class="simple-line"/>
@@ -284,7 +286,7 @@
       <text x="271" y="896" text-anchor="middle" class="node-caption">підігрів кореня</text>
       <text x="271" y="916" text-anchor="middle" class="node-gpio">GPIO39</text>
 
-      <!-- Світло (нове) -->
+      <!-- Світло -->
       <line x1="622" y1="638" x2="412" y2="470" class="simple-line-new"/>
       <circle cx="356" cy="426" r="72" class="node-circle-new"/>
       <text x="356" y="432" text-anchor="middle" class="node-title">Світло</text>
@@ -294,7 +296,7 @@
     </svg>
     <figcaption>
       Загальний вигляд без деталей: сім функціональних вузлів навколо контролера.
-      Мідний контур — додано цієї сесії. Точні піни, модулі й живлення — у детальній
+      Мідний контур — вузли, зв'язані в прошивці. Точні піни, модулі й живлення — у детальній
       схемі нижче.
     </figcaption>
   </figure>
@@ -336,8 +338,8 @@
       <text x="630" y="458" text-anchor="middle" class="wire-label">ADC1, 12-біт</text>
       <rect x="80" y="360" width="480" height="120" rx="10" class="box"/>
       <text x="106" y="392" class="box-title">Ґрунтова вологість</text>
-      <text x="106" y="420" class="box-line">Резистивний датчик (AZDelivery)</text>
-      <text x="106" y="444" class="box-note">живити лише на час виміру — корозія контактів</text>
+      <text x="106" y="420" class="box-line">Ємнісний DFRobot SEN0308 (жовтий дріт — сигнал)</text>
+      <text x="106" y="444" class="box-note">аналог 0–2.9V, живлення 3.3V; ADC1 — не конфліктує з Wi-Fi</text>
 
       <!-- DS18B20 OneWire -->
       <line x1="560" y1="640" x2="700" y2="640" class="wire"/>
@@ -384,8 +386,6 @@
       <text x="1090" y="518" text-anchor="middle" class="wire-label">нагрівач, ШІМ 1кГц</text>
 
       <rect x="1160" y="330" width="480" height="230" rx="10" class="box-new"/>
-      <rect x="1550" y="342" width="70" height="24" rx="5" class="badge-new"/>
-      <text x="1585" y="359" text-anchor="middle" class="badge-new-text">НОВЕ</text>
       <rect x="1520" y="372" width="100" height="26" rx="6" class="badge-power"/>
       <text x="1570" y="390" text-anchor="middle" class="badge-power-text">12V</text>
       <text x="1186" y="428" class="box-title">Блок вентилятор + PTC-радіатор</text>
@@ -393,17 +393,17 @@
       <text x="1186" y="478" class="box-line">Нагрівач PTC — MOSFET, ШІМ 0–255 (GPIO42)</text>
       <text x="1186" y="502" class="box-note">один вузол, два дроти — вент. ввімкнений, поки нагрівач &gt; 0</text>
 
-      <!-- Exhaust fan -->
+      <!-- LED heatsink fan -->
       <line x1="1020" y1="685" x2="1160" y2="685" class="wire-new"/>
       <circle cx="1020" cy="685" r="5" class="pin-dot-new"/>
-      <text x="1030" y="677" text-anchor="start" class="pin-num">GPIO38</text>
-      <text x="1090" y="703" text-anchor="middle" class="wire-label">реле/MOSFET, on/off</text>
+      <text x="1030" y="677" text-anchor="start" class="pin-num">GPIO41</text>
+      <text x="1090" y="703" text-anchor="middle" class="wire-label">реле, on/off</text>
       <rect x="1160" y="620" width="480" height="130" rx="10" class="box-new"/>
-      <rect x="1550" y="632" width="70" height="24" rx="5" class="badge-new"/>
-      <text x="1585" y="649" text-anchor="middle" class="badge-new-text">НОВЕ</text>
-      <text x="1186" y="686" class="box-title">Витяжка</text>
-      <text x="1186" y="712" class="box-line">Незалежний вентилятор, охолодження (GPIO38)</text>
-      <text x="1186" y="734" class="box-note">живлення — уточнити (ймовірно 12V, як інші модулі)</text>
+      <rect x="1520" y="632" width="100" height="26" rx="6" class="badge-power"/>
+      <text x="1570" y="650" text-anchor="middle" class="badge-power-text">12V</text>
+      <text x="1186" y="686" class="box-title">Кулер радіатора LED</text>
+      <text x="1186" y="712" class="box-line">4-пін PC-кулер через реле (GPIO41), лише +12V і GND</text>
+      <text x="1186" y="734" class="box-note">разом зі світлом (+2 хв) або led_fan_on — охолодження</text>
 
       <!-- Soil heater -->
       <line x1="1020" y1="875" x2="1160" y2="875" class="wire"/>
@@ -423,8 +423,6 @@
       <text x="1030" y="1057" text-anchor="start" class="pin-num">GPIO45</text>
       <text x="1090" y="1083" text-anchor="middle" class="wire-label">ШІМ димування 5кГц</text>
       <rect x="1160" y="1000" width="480" height="150" rx="10" class="box-new"/>
-      <rect x="1550" y="1012" width="70" height="24" rx="5" class="badge-new"/>
-      <text x="1585" y="1029" text-anchor="middle" class="badge-new-text">НОВЕ</text>
       <text x="1186" y="1066" class="box-title">LED-драйвер струму</text>
       <text x="1186" y="1092" class="box-line">Один діод ~900 мА, constant current (GPIO45)</text>
       <text x="1186" y="1114" class="box-note">повна яскравість 0–255, радіатор + вентилятор (GPIO41)</text>
@@ -451,8 +449,8 @@
     <figcaption>
       Повна карта підключень: зліва сенсори та камера (усі на 3.3V логіці ESP32), справа
       актуатори (кожен через власний модуль на зовнішньому живленні). * Точний перелік
-      14 ліній камери — у таблиці нижче. Піни, не підтверджені в коді (напруга насоса,
-      витяжки, LED-драйвера), позначені як «уточнити» — не вигадані значення.
+      14 ліній камери — у таблиці нижче. Значення, не підтверджені в коді (напруга насоса
+      й LED-драйвера), позначені як «уточнити» — не вигадані значення.
     </figcaption>
   </figure>
 
@@ -498,17 +496,17 @@
     </div>
 
     <div class="card accent">
-      <h2>Що нове цієї сесії</h2>
+      <h2>Зв'язки в прошивці</h2>
       <ul>
-        <li><b style="color:var(--ink)">Вентилятор + PTC-радіатор</b> — новий комбінований блок опалення, GPIO40 (вентилятор) + GPIO42 (нагрівач), замінює окремий старий вентилятор.</li>
-        <li><b style="color:var(--ink)">Витяжка</b> — новий незалежний вентилятор охолодження, GPIO38, бере на себе роль, яку раніше виконував вентилятор циркуляції.</li>
-        <li><b style="color:var(--ink)">LED-драйвер струму</b> — замінив пару MOSFET-модулів на 24V RGB+TW стрічці; тепер один діод ~900 мА, той самий сигнал на GPIO45.</li>
+        <li><b style="color:var(--ink)">Вентилятор + PTC-радіатор</b> — один блок, два дроти: GPIO40 (вентилятор) лишається увімкненим, поки на GPIO42 (нагрівач) потужність &gt; 0, незалежно від команди «fan_on».</li>
+        <li><b style="color:var(--ink)">Світло + кулер LED</b> — GPIO41 не має MQTT-команди: кулер вмикається разом зі світлом (GPIO45) і працює ще 2 хв після вимкнення.</li>
+        <li><b style="color:var(--ink)">Охолодження теплиці</b> — лише вентиляторами: вище верхньої межі температури GPIO40 і GPIO41 вмикаються разом, без нагрівача й без світла (витяжки немає).</li>
       </ul>
     </div>
   </div>
 
   <div class="tocheck">
-    <b>Перед фізичним підключенням уточніть:</b> напругу живлення насоса, витяжки й вхід
+    <b>Перед фізичним підключенням уточніть:</b> напругу живлення насоса й вхід
     LED-драйвера (не підтверджено в коді — виміряйте чи звірте з даташитами конкретних
     модулів, які у вас є), а також чи новий LED-драйвер підтягує вхід димування до Vcc
     (впливає на потребу в pull-down на GPIO45).

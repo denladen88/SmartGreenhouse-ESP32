@@ -35,14 +35,14 @@ MqttService::MqttService()
 void MqttService::begin() {
   _mqttClient.setServer(MQTT_BROKER_IP, MQTT_BROKER_PORT);
   _mqttClient.setCallback(handleMessage);
-  // 1024 замість дефолтних 256: окрім сенсорів payload містить шість 64-бітних
-  // runtime актуаторів; менший MQTT-буфер міг би мовчки відхилити publish().
+  // 1024 замість дефолтних 256: окрім сенсорів payload містить uptime і шість
+  // 64-бітних runtime актуаторів; менший MQTT-буфер міг би мовчки відхилити publish().
   _mqttClient.setBufferSize(1024);
   // Стеля busy-wait CONNACK у PubSubClient::connect(). connect() блокуючий і
   // викликається з loop(), тож ця стеля напряму обмежує, наскільки reconnect
-  // до недоступного/повільного брокера підвішує failsafe-таймери. Значення й
-  // причина, чому саме 3с (не 2с) — див. Config.h біля MQTT_CONNACK_TIMEOUT_S:
-  // 2с виявилось замало й спричиняло reconnect-шторм навіть коли брокер живий.
+  // до недоступного/повільного брокера підвішує failsafe-таймери. Чому саме
+  // 5с (не 2с) — див. Config.h біля MQTT_CONNACK_TIMEOUT_S: 2с виявилось
+  // замало й спричиняло reconnect-шторм навіть коли брокер живий.
   _mqttClient.setSocketTimeout(MQTT_CONNACK_TIMEOUT_S);
   // Те саме обмеження, але для самого TCP-connect (крок ДО CONNACK): якщо
   // брокер недоступний і мовчки не відповідає (а не одразу відхиляє
@@ -87,17 +87,19 @@ void MqttService::handleMessage(char* topic, uint8_t* payload, unsigned int leng
   // has* — чи ключ реально присутній у JSON (merge-семантика в обробнику).
   cmd.hasPump = !doc["pump_on"].isNull();
   cmd.hasFan = !doc["fan_on"].isNull();
+  cmd.hasLedFan = !doc["led_fan_on"].isNull();
   cmd.hasLight = !doc["light_brightness"].isNull();
   cmd.hasSoilHeater = !doc["soil_heater_power"].isNull();
   cmd.hasAirHeater = !doc["air_heater_power"].isNull();
   cmd.pumpOn = doc["pump_on"] | false;
   cmd.fanOn = doc["fan_on"] | false;
+  cmd.ledFanOn = doc["led_fan_on"] | false;
   cmd.lightBrightness = doc["light_brightness"] | (uint8_t)0;
   cmd.soilHeaterPower = doc["soil_heater_power"] | (uint8_t)0;
   cmd.airHeaterPower = doc["air_heater_power"] | (uint8_t)0;
 
-  Serial.printf("[MQTT] Команда: pump_on=%d, fan_on=%d, light_brightness=%d, soil_heater_power=%d, air_heater_power=%d\n",
-                cmd.pumpOn, cmd.fanOn, cmd.lightBrightness, cmd.soilHeaterPower, cmd.airHeaterPower);
+  Serial.printf("[MQTT] Команда: pump_on=%d, fan_on=%d, led_fan_on=%d, light_brightness=%d, soil_heater_power=%d, air_heater_power=%d\n",
+                cmd.pumpOn, cmd.fanOn, cmd.ledFanOn, cmd.lightBrightness, cmd.soilHeaterPower, cmd.airHeaterPower);
 
   if (_commandHandler) {
     _commandHandler(cmd);
@@ -157,10 +159,6 @@ bool MqttService::update(bool wifiUp) {
   return true;
 }
 
-bool MqttService::isConnected() {
-  return _mqttClient.connected();
-}
-
 void MqttService::publishTelemetry(const SensorData& data, const ActuatorService& actuators) {
   if (!_mqttClient.connected()) {
     return;
@@ -208,6 +206,7 @@ void MqttService::publishTelemetry(const SensorData& data, const ActuatorService
   doc["light_runtime_ms"] = actuators.lightRuntimeMs();
   doc["soil_heater_runtime_ms"] = actuators.soilHeaterRuntimeMs();
   doc["air_heater_runtime_ms"] = actuators.airHeaterRuntimeMs();
+  doc["led_fan_runtime_ms"] = actuators.ledFanRuntimeMs();
 
   char payload[768];
   size_t len = serializeJson(doc, payload, sizeof(payload));

@@ -37,6 +37,13 @@ namespace SmartGreenhouse.Backend.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("LedFanOn")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("LedFanReason")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("LightBrightness")
                         .HasColumnType("INTEGER");
 
@@ -88,6 +95,9 @@ namespace SmartGreenhouse.Backend.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("AirCoolingActive")
+                        .HasColumnType("INTEGER");
 
                     b.Property<bool>("AirDryingActive")
                         .HasColumnType("INTEGER");
@@ -237,6 +247,9 @@ namespace SmartGreenhouse.Backend.Migrations
 
                     b.Property<double?>("HumidityPct")
                         .HasColumnType("REAL");
+
+                    b.Property<long>("LedFanRuntimeMs")
+                        .HasColumnType("INTEGER");
 
                     b.Property<long>("LightRuntimeMs")
                         .HasColumnType("INTEGER");

@@ -91,7 +91,7 @@ void setup() {
     // якась команда з мережі.
     //
     // Merge-семантика: застосовуємо лише поля, реально присутні в JSON
-    // (cmd.hasX). Бекенд (Backend/Models/AiCommand.cs) завжди шле всі 5, тож
+    // (cmd.hasX). Бекенд (Backend/Models/AiCommand.cs) завжди шле всі 6, тож
     // для нього поведінка не змінилась; ручна часткова команда (напр. лише
     // {"pump_on":true}) більше не занулює решту актуаторів.
     // Помпа — лише "постріл": імпульс PUMP_RUN_DURATION_MS вимикає сама
@@ -110,6 +110,11 @@ void setup() {
     // із застосунку).
     if (cmd.hasFan) {
       actuators.setFan(cmd.fanOn);
+    }
+    // Активне охолодження: бекенд вмикає обидва вентилятори (fan_on +
+    // led_fan_on) без нагрівача й світла.
+    if (cmd.hasLedFan) {
+      actuators.setLedFan(cmd.ledFanOn);
     }
     if (cmd.hasLight) {
       actuators.setLight(cmd.lightBrightness);
@@ -210,7 +215,7 @@ void loop() {
   bool mqttUp = mqtt.update(wifiUp);
   actuators.update(); // failsafe-перевірка кожного актуатора щоцикл, незалежно від таймерів
 
-  // Стан актуатора важливіший за плановий 3-хвилинний інтервал сенсорів:
+  // Стан актуатора важливіший за плановий 3-хвилинний інтервал публікації:
   // при фактичному on/off одразу шлемо телеметрію, щоб dashboard показував
   // безперервний runtime навіть для короткого імпульсу помпи.
   static uint32_t lastActuatorRevision = actuators.stateRevision();

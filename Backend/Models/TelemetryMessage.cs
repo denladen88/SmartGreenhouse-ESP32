@@ -21,4 +21,7 @@ public record TelemetryMessage(
     [property: JsonPropertyName("fan_runtime_ms")] long FanRuntimeMs,
     [property: JsonPropertyName("light_runtime_ms")] long LightRuntimeMs,
     [property: JsonPropertyName("soil_heater_runtime_ms")] long SoilHeaterRuntimeMs,
-    [property: JsonPropertyName("air_heater_runtime_ms")] long AirHeaterRuntimeMs);
+    [property: JsonPropertyName("air_heater_runtime_ms")] long AirHeaterRuntimeMs,
+    // Кулер радіатора фітолампи — без MQTT-команди, прошивка вмикає його сама
+    // разом зі світлом (+доохолодження). Старіша прошивка цей ключ не шле → 0.
+    [property: JsonPropertyName("led_fan_runtime_ms")] long LedFanRuntimeMs = 0);

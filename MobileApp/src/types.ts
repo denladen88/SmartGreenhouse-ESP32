@@ -19,6 +19,9 @@ export interface TelemetryRecord {
   lightRuntimeMs: number;
   soilHeaterRuntimeMs: number;
   airHeaterRuntimeMs: number;
+  // Кулер радіатора фітолампи: без команди, прошивка вмикає його разом зі
+  // світлом (+2 хв доохолодження). 0 у старих записах, до цього поля.
+  ledFanRuntimeMs: number;
 }
 
 export interface AiDecisionRecord {
@@ -26,12 +29,14 @@ export interface AiDecisionRecord {
   timestamp: string;
   pumpOn: boolean;
   fanOn: boolean;
+  ledFanOn: boolean;
   lightBrightness: number;
   soilHeaterPower: number;
   airHeaterPower: number;
   source: 'LocalController' | 'ManualOverride' | 'StressTest' | string;
   pumpReason: string;
   fanReason: string;
+  ledFanReason: string;
   lightReason: string;
   soilHeaterReason: string;
   airHeaterReason: string;
@@ -42,6 +47,7 @@ export interface AiDecisionRecord {
 export interface AiCommand {
   pump_on: boolean;
   fan_on: boolean;
+  led_fan_on: boolean;
   light_brightness: number;
   soil_heater_power: number;
   air_heater_power: number;

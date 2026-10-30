@@ -26,7 +26,7 @@ export function ControlsScreen() {
   const latest = latestDecisionQuery.data;
 
   const [pumpOn, setPumpOn] = useState(false);
-  const [fanOn, setFanOn] = useState(false);
+  const [coolingOn, setCoolingOn] = useState(false);
   const [lightBrightness, setLightBrightness] = useState(0);
   const [soilHeaterPower, setSoilHeaterPower] = useState(0);
   const [airHeaterPower, setAirHeaterPower] = useState(0);
@@ -37,7 +37,7 @@ export function ControlsScreen() {
   useEffect(() => {
     if (latest) {
       setPumpOn(latest.pumpOn);
-      setFanOn(latest.fanOn);
+      setCoolingOn(latest.ledFanOn);
       setLightBrightness(latest.lightBrightness);
       setSoilHeaterPower(latest.soilHeaterPower);
       setAirHeaterPower(latest.airHeaterPower);
@@ -52,10 +52,13 @@ export function ControlsScreen() {
   const send = () => {
     mutation.mutate({
       pump_on: pumpOn,
-      fan_on: fanOn,
+      // Охолодження = обидва вентилятори без нагріву (як правило на бекенді);
+      // інакше вентилятор блоку лише обдуває нагрівач повітря.
+      fan_on: coolingOn || airHeaterPower > 0,
+      led_fan_on: coolingOn,
       light_brightness: Math.round(lightBrightness),
       soil_heater_power: Math.round(soilHeaterPower),
-      air_heater_power: Math.round(airHeaterPower),
+      air_heater_power: coolingOn ? 0 : Math.round(airHeaterPower),
     });
   };
 
@@ -67,8 +70,8 @@ export function ControlsScreen() {
       </View>
 
       <View style={styles.row}>
-        <Text style={styles.label}>Вентилятор циркуляції (авто: разом із нагрівачем повітря)</Text>
-        <Switch value={fanOn} onValueChange={setFanOn} />
+        <Text style={styles.label}>Охолодження (обидва вентилятори, без нагріву)</Text>
+        <Switch value={coolingOn} onValueChange={setCoolingOn} />
       </View>
 
       <View style={styles.sliderBlock}>
@@ -94,12 +97,13 @@ export function ControlsScreen() {
       </View>
 
       <View style={styles.sliderBlock}>
-        <Text style={styles.label}>Потужність нагрівача повітря: {Math.round(airHeaterPower)}</Text>
+        <Text style={styles.label}>Потужність нагрівача повітря (з вбудованим вентилятором): {Math.round(airHeaterPower)}</Text>
         <Slider
           minimumValue={0}
           maximumValue={255}
           step={1}
-          value={airHeaterPower}
+          value={coolingOn ? 0 : airHeaterPower}
+          disabled={coolingOn}
           onValueChange={setAirHeaterPower}
         />
       </View>
