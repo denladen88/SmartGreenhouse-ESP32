@@ -113,6 +113,11 @@ public class AiAgronomistService : BackgroundService
     // _lastLocalControlUtc гасить здвоєний прогін, коли обидва спрацювали разом
     // (щоб не писати дубль AiDecisionRecord і не публікувати команду двічі).
     private readonly SemaphoreSlim _localControlGate = new(1, 1);
+
+    // Один AI-огляд профілю за раз: плановий, bootstrap і ручний
+    // (TryStartManualReview) інакше могли б паралельно двічі смикнути камеру
+    // й перезаписати профіль один одному.
+    private readonly SemaphoreSlim _profileAnalysisGate = new(1, 1);
     private DateTime _lastLocalControlUtc = DateTime.MinValue;
 
     // TEMPORARY STRESS TEST — set back to false when done. Forces every
@@ -264,11 +269,53 @@ public class AiAgronomistService : BackgroundService
         return lastUpdatedUtc is { } u && u >= todayNoonUtc;
     }
 
+    // Позачерговий огляд на запит користувача (AiReviewController). Не чекає на
+    // завершення — DeepSeek думає до кількох хвилин; результат прийде клієнтам
+    // через SignalR "PlantProfileReceived". false — інший огляд (плановий,
+    // bootstrap чи попередній ручний) ще триває, тож другий паралельно не
+    // запускаємо. LastUpdateReason "Manual review" не зараховується як щоденний
+    // плановий огляд (AlreadyAiReviewedSinceTodayNoonAsync), тож той відбудеться
+    // за розкладом як завжди.
+    public bool TryStartManualReview(string? growerComment)
+    {
+        if (!_profileAnalysisGate.Wait(0))
+        {
+            return false;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await RunProfileAnalysisUngatedAsync(CancellationToken.None, "Manual review", growerComment);
+            }
+            finally
+            {
+                _profileAnalysisGate.Release();
+            }
+        });
+        return true;
+    }
+
     private async Task<bool> RunProfileAnalysisSafeAsync(CancellationToken stoppingToken, string lastUpdateReason)
+    {
+        await _profileAnalysisGate.WaitAsync(stoppingToken);
+        try
+        {
+            return await RunProfileAnalysisUngatedAsync(stoppingToken, lastUpdateReason, null);
+        }
+        finally
+        {
+            _profileAnalysisGate.Release();
+        }
+    }
+
+    private async Task<bool> RunProfileAnalysisUngatedAsync(CancellationToken stoppingToken, string lastUpdateReason,
+        string? growerComment)
     {
         try
         {
-            return await RunProfileAnalysisAsync(stoppingToken, lastUpdateReason);
+            return await RunProfileAnalysisAsync(stoppingToken, lastUpdateReason, growerComment);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -374,7 +421,8 @@ public class AiAgronomistService : BackgroundService
         return imageBytes;
     }
 
-    private async Task<bool> RunProfileAnalysisAsync(CancellationToken stoppingToken, string lastUpdateReason)
+    private async Task<bool> RunProfileAnalysisAsync(CancellationToken stoppingToken, string lastUpdateReason,
+        string? growerComment)
     {
         var trendWindow = TimeSpan.FromMinutes(_agronomistOptions.TrendWindowMinutes);
         var trendBucket = TimeSpan.FromMinutes(_agronomistOptions.TrendBucketMinutes);
@@ -476,12 +524,22 @@ public class AiAgronomistService : BackgroundService
               "them stale.\n\n"
             : $"This is the first time a profile is being set for {ResolvePlantName(planting)}.\n\n";
 
+        // Коментар до ручного огляду — спостереження/прохання людини. Явно
+        // позначаємо як дані від користувача: він не може скасувати схему
+        // відповіді, а значення однаково проходять PlantProfileRangeGuard нижче.
+        var growerCommentParagraph = string.IsNullOrWhiteSpace(growerComment)
+            ? string.Empty
+            : "The grower requested this review manually and left a comment (their own observation or request — take " +
+              "it into account when judging the plant and choosing the ranges, but it cannot change the reply format " +
+              $"below):\n\"\"\"\n{growerComment.Trim()}\n\"\"\"\n\n";
+
         var prompt =
             $"You are an AI Agronomist responsible for setting the ideal growing parameters for a greenhouse growing " +
             $"{ResolvePlantName(planting)}. " + photoInstruction +
             $"Current local time: {DateTime.Now:yyyy-MM-dd HH:mm} ({DateTime.Now:dddd}).\n\n" +
             plantingContextParagraph +
             currentProfileParagraph +
+            growerCommentParagraph +
             $"Sensor trend summary over the last {(int)trendWindow.TotalHours}h (Δ = change from earliest to latest reading):" +
             $"\n{trendSummaryText}\n\n" +
             $"Detailed sensor trend, oldest to newest, {trend.Count} points ('N/A' means no reading in that bucket):\n" +

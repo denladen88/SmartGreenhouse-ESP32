@@ -477,6 +477,7 @@ button.secondary {
 .actuator-card,
 .rule-card,
 .ai-panel,
+.ai-review-request,
 .empty-card,
 .error-panel {
   border: 1px solid var(--border);
@@ -676,6 +677,34 @@ button.secondary {
   overflow: hidden;
   border-radius: 16px;
 }
+
+.ai-review-request {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 18px 22px;
+  border-radius: 16px;
+}
+
+.ai-review-request label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.ai-review-request textarea { resize: vertical; }
+
+.ai-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.ai-review-status { color: var(--text-muted); font-size: 13px; }
 
 .ai-summary {
   display: grid;

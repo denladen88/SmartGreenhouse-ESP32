@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useApiClient } from '../api/hooks';
 import { Sparkline } from '../components/Sparkline';
@@ -82,6 +82,63 @@ function formatRuntime(runtimeMs: number | undefined, measuredAt: string | undef
         ? [`${minutes} хв`, `${seconds} с`]
         : [`${seconds} с`];
   return `${isFresh ? 'Безперервно' : 'Останнє значення ≈'} ${parts.join(' ')}`;
+}
+
+// Скільки чекаємо на новий профіль після ручного запуску, перш ніж сказати,
+// що результату немає. DeepSeek разом із ретраями вкладається в кілька хвилин.
+const AI_REVIEW_WAIT_MS = 6 * 60 * 1000;
+
+// Позачерговий AI-огляд з коментарем. POST лише ЗАПУСКАЄ огляд (202) — сам
+// результат приходить пізніше через SignalR "PlantProfileReceived", тож
+// "готово" визначаємо за зміною lastAiReviewedUtc профілю.
+function AiReviewRequest({ lastReviewedUtc, nowMs }: { lastReviewedUtc: string | null; nowMs: number }) {
+  const api = useApiClient();
+  const [comment, setComment] = useState('');
+  const [started, setStarted] = useState<{ atMs: number; reviewedUtc: string | null } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: (text: string) => api.post('/api/ai-review', { comment: text.trim() || null }),
+    onMutate: () => setError(null),
+    onSuccess: () => {
+      setStarted({ atMs: Date.now(), reviewedUtc: lastReviewedUtc });
+      setComment('');
+    },
+    onError: (err: Error) => setError(err.message.includes(' 409 ')
+      ? 'AI-аналіз уже триває — дочекайтеся його результату.'
+      : err.message),
+  });
+
+  const done = started !== null && lastReviewedUtc !== started.reviewedUtc;
+  const timedOut = started !== null && !done && nowMs - started.atMs > AI_REVIEW_WAIT_MS;
+  const waiting = started !== null && !done && !timedOut;
+
+  return (
+    <div className="ai-review-request">
+      <label>
+        Коментар для AI (необовʼязково)
+        <textarea
+          rows={3}
+          maxLength={1000}
+          value={comment}
+          placeholder="Напр.: нижнє листя жовтіє; переставила ближче до вікна"
+          onChange={(e) => setComment(e.target.value)}
+          disabled={mutation.isPending || waiting}
+        />
+      </label>
+      <div className="ai-review-actions">
+        <button onClick={() => mutation.mutate(comment)} disabled={mutation.isPending || waiting}>
+          {mutation.isPending ? 'Запускаємо…' : waiting ? 'AI аналізує…' : 'Запустити AI-аналіз зараз'}
+        </button>
+        <span className="ai-review-status">
+          {waiting && 'Зазвичай 1–3 хв. Новий профіль зʼявиться тут автоматично.'}
+          {done && 'Готово — профіль оновлено.'}
+          {timedOut && 'Результату немає — перевірте логи backend.'}
+        </span>
+      </div>
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
 }
 
 interface ActuatorCardProps { name: string; value: string; active: boolean; reason: string; runtime: string }
@@ -239,6 +296,7 @@ export function DashboardPage() {
       <section>
         <div className="section-heading"><div><span className="section-kicker">AI-агроном</span><h2>Останній аналіз і рішення</h2></div>
           {profile && <span className="section-note">AI-аналіз: {formatDate(profile.lastAiReviewedUtc || profile.lastUpdatedUtc)}</span>}</div>
+        <AiReviewRequest lastReviewedUtc={profile?.lastAiReviewedUtc ?? null} nowMs={nowMs} />
         {profile ? <div className="ai-panel">
           <div className="ai-summary"><div><span className="ai-label">Рішення AI</span><h3>Цільовий профіль для “{profile.plantName}”</h3><p>{profile.notes || 'AI не додав текстового пояснення.'}</p></div>
             <div className="target-grid">

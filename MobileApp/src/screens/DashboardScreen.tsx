@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import React, { useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useApiClient } from '../api/hooks';
 import { Sparkline } from '../components/Sparkline';
 import type { AiDecisionRecord, AutomationOverview, AutomationRule, PlantProfile, TelemetryRecord } from '../types';
@@ -94,6 +94,45 @@ function AuditCard({ title, caption, content }: { title: string; caption: string
   </View>;
 }
 
+// Те саме, що AiReviewRequest у ../../WebApp/src/pages/DashboardPage.tsx:
+// POST лише запускає огляд, "готово" — коли змінився lastAiReviewedUtc
+// профілю (новий профіль приходить через SignalR "PlantProfileReceived").
+const AI_REVIEW_WAIT_MS = 6 * 60 * 1000;
+
+function AiReviewRequest({ lastReviewedUtc, nowMs }: { lastReviewedUtc: string | null; nowMs: number }) {
+  const api = useApiClient();
+  const [comment, setComment] = useState('');
+  const [started, setStarted] = useState<{ atMs: number; reviewedUtc: string | null } | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: (text: string) => api.post('/api/ai-review', { comment: text.trim() || null }),
+    onSuccess: () => {
+      setStarted({ atMs: Date.now(), reviewedUtc: lastReviewedUtc });
+      setComment('');
+    },
+    onError: (err: Error) => Alert.alert('AI-аналіз', err.message.includes(' 409 ')
+      ? 'AI-аналіз уже триває — дочекайтеся його результату.'
+      : err.message),
+  });
+
+  const done = started !== null && lastReviewedUtc !== started.reviewedUtc;
+  const timedOut = started !== null && !done && nowMs - started.atMs > AI_REVIEW_WAIT_MS;
+  const waiting = started !== null && !done && !timedOut;
+  const busy = mutation.isPending || waiting;
+
+  return <View style={styles.reviewCard}>
+    <Text style={styles.reviewLabel}>Коментар для AI (необовʼязково)</Text>
+    <TextInput style={styles.reviewInput} value={comment} onChangeText={setComment} editable={!busy} multiline maxLength={1000}
+      placeholder="Напр.: нижнє листя жовтіє; переставила ближче до вікна" />
+    <Pressable style={[styles.reviewButton, busy ? styles.reviewButtonDisabled : null]} disabled={busy} onPress={() => mutation.mutate(comment)}>
+      <Text style={styles.reviewButtonText}>{mutation.isPending ? 'Запускаємо…' : waiting ? 'AI аналізує…' : 'Запустити AI-аналіз зараз'}</Text>
+    </Pressable>
+    {waiting ? <Text style={styles.reviewStatus}>Зазвичай 1–3 хв. Новий профіль зʼявиться тут автоматично.</Text> : null}
+    {done ? <Text style={styles.reviewStatus}>Готово — профіль оновлено.</Text> : null}
+    {timedOut ? <Text style={styles.reviewStatus}>Результату немає — перевірте логи backend.</Text> : null}
+  </View>;
+}
+
 function sourceLabel(source: string | undefined) {
   if (source === 'ManualOverride') return 'Ручне керування';
   if (source === 'StressTest') return 'Тестовий режим';
@@ -181,6 +220,7 @@ export function DashboardScreen() {
     {automation ? <><Text style={styles.controllerText}>{automation.controller}</Text>{automation.rules.map((rule) => <RuleCard key={rule.id} rule={rule} />)}</> : <Text style={styles.emptyText}>Правила стануть доступні після оновлення backend.</Text>}
 
     <SectionHeader kicker="AI-агроном" title="Останній аналіз і рішення" note={(profile?.lastAiReviewedUtc || profile?.lastUpdatedUtc) ? `AI-аналіз: ${new Date((profile?.lastAiReviewedUtc || profile?.lastUpdatedUtc)!).toLocaleString('uk-UA')}` : undefined} />
+    <AiReviewRequest lastReviewedUtc={profile?.lastAiReviewedUtc ?? null} nowMs={nowMs} />
     {profile ? <View style={styles.aiPanel}><Text style={styles.aiTitle}>Цільовий профіль для “{profile.plantName}”</Text><Text style={styles.aiNotes}>{profile.notes}</Text>
       <View style={styles.targets}>
         <Text style={styles.targetItem}>Повітря  {profile.tempMinC.toFixed(0)}–{profile.tempMaxC.toFixed(0)}°C</Text>
@@ -197,6 +237,12 @@ export function DashboardScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f4f6f3' }, content: { padding: 12, paddingBottom: 36 },
+  reviewCard: { padding: 14, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e3e8e1', borderRadius: 15, marginBottom: 10 },
+  reviewLabel: { color: '#64706a', fontSize: 12, marginBottom: 6 },
+  reviewInput: { borderWidth: 1, borderColor: '#e3e8e1', borderRadius: 8, padding: 10, fontSize: 14, minHeight: 70, textAlignVertical: 'top', color: '#25312b' },
+  reviewButton: { marginTop: 10, paddingVertical: 11, borderRadius: 8, backgroundColor: '#287c54', alignItems: 'center' },
+  reviewButtonDisabled: { opacity: 0.6 }, reviewButtonText: { color: '#fff', fontWeight: '700' },
+  reviewStatus: { color: '#7a847f', fontSize: 12, marginTop: 8 },
   hero: { padding: 20, borderRadius: 18, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e3e8e1', marginBottom: 28 },
   kicker: { color: '#287c54', fontSize: 10, fontWeight: '800', letterSpacing: 1.2 },
   heroTitle: { fontSize: 28, fontWeight: '800', color: '#1f2924', marginTop: 4 }, heroText: { color: '#64706a', marginTop: 4 },
