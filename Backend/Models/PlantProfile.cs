@@ -3,7 +3,7 @@ namespace SmartGreenhouse.Backend.Models;
 // Структурований, "живий" профіль ідеальних параметрів рослини — на відміну від
 // вільного тексту PlantOptions.CareNotes (який лише одноразово засіває перший
 // профіль), цей запис щодня (або позачергово, при стійкій аномалії) повністю
-// переписує Gemini (AiAgronomistService.RunProfileAnalysisAsync). Актуатори між
+// переписує DeepSeek (AiAgronomistService.RunProfileAnalysisAsync). Актуатори між
 // цими переглядами керуються локально (RunLocalControlAsync) саме за цими
 // значеннями. PlantName — природний ключ: зміна Plant:Name в конфігурації
 // природно породжує новий профіль замість тихого перевикористання старого.
@@ -19,7 +19,7 @@ public class PlantProfile
 
     // Локальне правило поливу реально спирається на ці межі (у поєднанні зі
     // спадним трендом, не саму лише точку) — тому компенсація дрейфу датчика
-    // ґрунту (корозія контактів з часом) лягає на Gemini: щодня переглядаючи
+    // ґрунту (корозія контактів з часом) лягає на DeepSeek: щодня переглядаючи
     // фото/історію, він підлаштовує ці числа, а не на жорстке ігнорування
     // порогу локальним правилом (див. AiAgronomistService.RunLocalControlAsync).
     public double SoilMoistureMinPct { get; set; }
@@ -41,7 +41,7 @@ public class PlantProfile
     public double DailyLightHoursTarget { get; set; }
 
     // Фенологічна стадія рослини на момент останнього огляду (seedling /
-    // vegetative / flowering / fruiting / senescing тощо) — Gemini оцінює її з
+    // vegetative / flowering / fruiting / senescing тощо) — DeepSeek оцінює її з
     // фото + днів від посадки + тренду і повертає окремим полем. Локальний
     // контролер її не читає; це контекст для наступного огляду і для показу в
     // застосунках.
@@ -49,7 +49,7 @@ public class PlantProfile
 
     public string Notes { get; set; } = string.Empty;
 
-    // Аудит останнього звернення до Gemini. Prompt зберігається без JPEG-байтів:
+    // Аудит останнього звернення до DeepSeek. Prompt зберігається без JPEG-байтів:
     // ознака вкладеного фото йде окремо, щоб API/клієнти не тягнули base64.
     public string LastAiPrompt { get; set; } = string.Empty;
     public string LastAiResponse { get; set; } = string.Empty;

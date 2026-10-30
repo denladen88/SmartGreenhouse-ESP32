@@ -2,7 +2,7 @@ namespace SmartGreenhouse.Backend.Models;
 
 // CareNotes/DailyLightHoursTarget — це "насіння" для першого аналізу профілю
 // (AiAgronomistService.RunProfileAnalysisAsync, коли PlantProfile для цього
-// Name ще не існує). Далі профіль щодня повністю переписує сам Gemini, а
+// Name ще не існує). Далі профіль щодня повністю переписує сам DeepSeek, а
 // CareNotes лишається лише додатковим контекстом-нагадуванням у промпті.
 // DailyLightHoursTarget використовується як fallback, поки жодного профілю
 // ще не створено.

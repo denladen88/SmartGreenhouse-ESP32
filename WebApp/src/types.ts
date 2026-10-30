@@ -1,6 +1,6 @@
 // Дзеркалить DTO з Backend/Models — System.Text.Json за замовчуванням
 // серіалізує camelCase, окрім AiCommand (явний JsonPropertyName snake_case
-// для сумісності з MQTT-стороною ESP32/Gemini). Той самий контракт, що й у
+// для сумісності з MQTT-стороною ESP32/DeepSeek). Той самий контракт, що й у
 // ../MobileApp/src/types.ts.
 
 export interface TelemetryRecord {

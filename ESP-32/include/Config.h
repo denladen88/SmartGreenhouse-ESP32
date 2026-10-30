@@ -202,7 +202,7 @@ constexpr float NIGHT_LUX_THRESHOLD = 5.0f;
 // (AiAgronomistService.RunLocalControlSignalLoopAsync), тож частіші дані =
 // швидша реакція актуаторів і статистично надійніші вікна трендів
 // (SoilMoistureTrendWindowMinutes=30 отримує ~10 точок замість ~3). ~480
-// рядків/добу в таблиці телеметрії — денний промпт Gemini не роздувається,
+// рядків/добу в таблиці телеметрії — денний промпт DeepSeek не роздувається,
 // DownsampleTrend усе одно групує в 60-хв бакети.
 constexpr unsigned long SENSOR_READ_INTERVAL_MS = 60000;
 constexpr unsigned long MQTT_PUBLISH_INTERVAL_MS = 180000;

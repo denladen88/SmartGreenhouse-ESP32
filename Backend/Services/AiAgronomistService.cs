@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,7 +14,7 @@ namespace SmartGreenhouse.Backend.Services;
 
 // Два незалежні цикли: RunProfileSupervisionLoopAsync рівно раз на добу о
 // AiAgronomistOptions.DailyAnalysisHour (плюс одноразовий bootstrap, якщо для
-// поточної рослини профілю ще нема) питає Gemini і повністю переписує
+// поточної рослини профілю ще нема) питає DeepSeek і повністю переписує
 // PlantProfile; RunLocalControl* сам вирішує pump/fan/light/heater простими
 // правилами, спираючись на цей профіль — жодного звернення до AI на кожен тік
 // актуаторів.
@@ -96,13 +97,13 @@ public class AiAgronomistService : BackgroundService
 
     private readonly ILogger<AiAgronomistService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly GeminiOptions _geminiOptions;
+    private readonly DeepSeekOptions _deepSeekOptions;
     private readonly Esp32Options _esp32Options;
     private readonly MqttOptions _mqttOptions;
     private readonly AiAgronomistOptions _agronomistOptions;
     private readonly PlantOptions _plantOptions;
     private readonly IMqttPublisher _mqttPublisher;
-    private readonly HttpClient _httpClient;        // Gemini (45с — фото + prompt)
+    private readonly HttpClient _httpClient;        // DeepSeek (120с — фото + prompt + reasoning)
     private readonly HttpClient _cameraHttpClient;  // ESP32-CAM (15с — щоб мертва камера не тримала слот 45с)
     private readonly IHubContext<TelemetryHub> _hub;
     private readonly TelemetrySignal _telemetrySignal;
@@ -124,7 +125,7 @@ public class AiAgronomistService : BackgroundService
     public AiAgronomistService(
         ILogger<AiAgronomistService> logger,
         IServiceScopeFactory scopeFactory,
-        IOptions<GeminiOptions> geminiOptions,
+        IOptions<DeepSeekOptions> deepSeekOptions,
         IOptions<Esp32Options> esp32Options,
         IOptions<MqttOptions> mqttOptions,
         IOptions<AiAgronomistOptions> agronomistOptions,
@@ -136,7 +137,7 @@ public class AiAgronomistService : BackgroundService
     {
         _logger = logger;
         _scopeFactory = scopeFactory;
-        _geminiOptions = geminiOptions.Value;
+        _deepSeekOptions = deepSeekOptions.Value;
         _esp32Options = esp32Options.Value;
         _mqttOptions = mqttOptions.Value;
         _agronomistOptions = agronomistOptions.Value;
@@ -172,7 +173,7 @@ public class AiAgronomistService : BackgroundService
         await RunProfileAnalysisSafeAsync(ct, $"Initial profile: {reason}");
     }
 
-    // ---- Профіль: щодня після DailyAnalysisHour Gemini переглядає все і переписує PlantProfile ----
+    // ---- Профіль: щодня після DailyAnalysisHour DeepSeek переглядає все і переписує PlantProfile ----
 
     private async Task RunProfileSupervisionLoopAsync(CancellationToken stoppingToken)
     {
@@ -200,7 +201,7 @@ public class AiAgronomistService : BackgroundService
                 }
 
                 // Після планового часу повторюємо до успішного запису профілю.
-                // Це покриває тимчасову відсутність телеметрії, помилки Gemini,
+                // Це покриває тимчасову відсутність телеметрії, помилки DeepSeek,
                 // невалідний JSON і помилки БД. Фото для успіху не потрібне.
                 var succeeded = await RunProfileAnalysisSafeAsync(stoppingToken, "Scheduled daily review");
                 if (!succeeded)
@@ -217,6 +218,16 @@ public class AiAgronomistService : BackgroundService
         {
             // Expected on shutdown.
         }
+    }
+
+    // Гарантований темний період NightRestStartHour–NightRestEndHour за локальним
+    // годинником; підтримує інтервал через північ (напр. 23–5).
+    private bool IsNightRest()
+    {
+        var hour = DateTime.Now.Hour;
+        return _agronomistOptions.NightRestStartHour > _agronomistOptions.NightRestEndHour
+            ? hour >= _agronomistOptions.NightRestStartHour || hour < _agronomistOptions.NightRestEndHour
+            : hour >= _agronomistOptions.NightRestStartHour && hour < _agronomistOptions.NightRestEndHour;
     }
 
     // Час до найближчого настання DailyAnalysisHour за локальним годинником. У
@@ -314,6 +325,16 @@ public class AiAgronomistService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to capture image from ESP32-CAM at {CameraUrl}", _esp32Options.CameraUrl);
+            return null;
+        }
+
+        // Під час нічного відпочинку лампу заради фото не вмикаємо: локальний
+        // контролер на першу ж телеметрію після ввімкнення гасить її назад (ніч),
+        // тож лампа лише блимала, а кадру однаково не було — і так на кожну
+        // повторну спробу щоденного огляду. Огляд без фото дозволений.
+        if (imageBytes.Length == 0 && IsNightRest())
+        {
+            _logger.LogInformation("No photo (night per ESP32) during night rest — skipping forced grow light, reviewing without photo");
             return null;
         }
 
@@ -425,7 +446,7 @@ public class AiAgronomistService : BackgroundService
             : "No photo was available this time (the camera doesn't capture at night, when ambient light is too low for a " +
               "useful frame) — base your review on the sensor trend and history alone. ";
 
-        // Контекст посадки йде В КОЖНОМУ огляді (не лише в першому), щоб Gemini
+        // Контекст посадки йде В КОЖНОМУ огляді (не лише в першому), щоб модель
         // міг судити про етап розвитку за віком рослини, а не лише за фото.
         var daysSincePlanting = planting is not null
             ? Math.Max(0, (int)(DateTime.UtcNow - planting.PlantedDateUtc).TotalDays)
@@ -502,19 +523,22 @@ public class AiAgronomistService : BackgroundService
             "markdown code blocks. Write the GrowthStage and Notes values in Ukrainian so they can be shown directly " +
             "to the grower.";
 
-        var parts = new List<object> { new { text = prompt } };
+        // OpenAI-сумісний формат: фото — data-URL у частині image_url.
+        // response_format json_object вимагає слова "JSON" у промпті (воно там є).
+        var content = new List<object> { new { type = "text", text = prompt } };
         if (hasPhoto)
         {
-            parts.Add(new { inline_data = new { mime_type = "image/jpeg", data = base64Image } });
+            content.Add(new { type = "image_url", image_url = new { url = $"data:image/jpeg;base64,{base64Image}" } });
         }
 
         var requestBody = new
         {
-            contents = new[] { new { parts = parts.ToArray() } },
-            generationConfig = new { response_mime_type = "application/json" }
+            model = _deepSeekOptions.Model,
+            messages = new[] { new { role = "user", content = content.ToArray() } },
+            response_format = new { type = "json_object" }
         };
 
-        var text = await CallGeminiAsync(requestBody, stoppingToken);
+        var text = await CallDeepSeekAsync(requestBody, stoppingToken);
         if (text is null)
         {
             return false;
@@ -922,10 +946,7 @@ public class AiAgronomistService : BackgroundService
         var lightHoursSoFarToday = EstimateLightHours(todayLightRecords, _agronomistOptions.GrowthLuxThreshold) +
             EstimateGrowLightHours(todayLightDecisions);
 
-        var hour = DateTime.Now.Hour;
-        var isNightRest = _agronomistOptions.NightRestStartHour > _agronomistOptions.NightRestEndHour
-            ? hour >= _agronomistOptions.NightRestStartHour || hour < _agronomistOptions.NightRestEndHour
-            : hour >= _agronomistOptions.NightRestStartHour && hour < _agronomistOptions.NightRestEndHour;
+        var isNightRest = IsNightRest();
         // Без BH1750 (Lux == null) поведінка як раніше — вважаємо, що темно.
         // AmbientLuxRecheckMinutes = 0: датчик екранований від лампи, тож її
         // власний внесок у показ малий і його достатньо брати як є.
@@ -1218,14 +1239,14 @@ public class AiAgronomistService : BackgroundService
 
     // ---- Спільне ----
 
-    // Спільна логіка виклику Gemini (retry/backoff на 429/5xx, парсинг тексту з
+    // Спільна логіка виклику DeepSeek (retry/backoff на 429/5xx, парсинг тексту з
     // відповіді) — використовується профільним аналізом.
-    private async Task<string?> CallGeminiAsync(object requestBody, CancellationToken stoppingToken)
+    private async Task<string?> CallDeepSeekAsync(object requestBody, CancellationToken stoppingToken)
     {
-        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{_geminiOptions.Model}:generateContent";
+        var url = $"{_deepSeekOptions.BaseUrl.TrimEnd('/')}/chat/completions";
 
-        // Gemini occasionally returns 503/429 when its servers are overloaded — these are
-        // transient on Google's side, not a problem with our request, so retry a few times
+        // DeepSeek occasionally returns 503/429 when its servers are overloaded — these are
+        // transient on the provider's side, not a problem with our request, so retry a few times
         // with backoff before giving up and letting the cycle fail for real.
         const int maxAttempts = 3;
         var retryDelay = TimeSpan.FromSeconds(5);
@@ -1236,10 +1257,10 @@ public class AiAgronomistService : BackgroundService
             {
                 Content = JsonContent.Create(requestBody)
             };
-            request.Headers.Add("x-goog-api-key", _geminiOptions.ApiKey);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _deepSeekOptions.ApiKey);
 
-            _logger.LogInformation("Dispatching request to Gemini model {Model} (attempt {Attempt}/{MaxAttempts})",
-                _geminiOptions.Model, attempt, maxAttempts);
+            _logger.LogInformation("Dispatching request to DeepSeek model {Model} (attempt {Attempt}/{MaxAttempts})",
+                _deepSeekOptions.Model, attempt, maxAttempts);
 
             try
             {
@@ -1251,7 +1272,7 @@ public class AiAgronomistService : BackgroundService
                 // Network-level failure (timeout, connection reset) before we even got a response —
                 // just as retryable as a transient 5xx, but SendAsync throws instead of returning one.
                 _logger.LogWarning(ex,
-                    "Gemini request threw {ExceptionType} (attempt {Attempt}/{MaxAttempts}), retrying in {Delay}",
+                    "DeepSeek request threw {ExceptionType} (attempt {Attempt}/{MaxAttempts}), retrying in {Delay}",
                     ex.GetType().Name, attempt, maxAttempts, retryDelay);
                 await Task.Delay(retryDelay, stoppingToken);
                 retryDelay *= 2;
@@ -1266,7 +1287,7 @@ public class AiAgronomistService : BackgroundService
             }
 
             _logger.LogWarning(
-                "Gemini request failed with {StatusCode} (attempt {Attempt}/{MaxAttempts}), retrying in {Delay}",
+                "DeepSeek request failed with {StatusCode} (attempt {Attempt}/{MaxAttempts}), retrying in {Delay}",
                 response.StatusCode, attempt, maxAttempts, retryDelay);
             response.Dispose();
             await Task.Delay(retryDelay, stoppingToken);
@@ -1277,20 +1298,21 @@ public class AiAgronomistService : BackgroundService
 
         if (!response.IsSuccessStatusCode)
         {
-            _logger.LogWarning("Gemini request failed with {StatusCode}, response body: {Body}",
+            _logger.LogWarning("DeepSeek request failed with {StatusCode}, response body: {Body}",
                 response.StatusCode, rawBody);
         }
 
         response.EnsureSuccessStatusCode();
         response.Dispose();
-        _logger.LogDebug("Raw Gemini response: {RawBody}", rawBody);
+        _logger.LogDebug("Raw DeepSeek response: {RawBody}", rawBody);
 
-        var geminiResponse = JsonSerializer.Deserialize<GeminiGenerateContentResponse>(rawBody);
-        var text = geminiResponse?.Candidates?.FirstOrDefault()?.Content?.Parts?.FirstOrDefault()?.Text;
+        // reasoning_content (хід думок моделі) свідомо не читаємо — JSON-відповідь лише в content.
+        var completion = JsonSerializer.Deserialize<ChatCompletionResponse>(rawBody);
+        var text = completion?.Choices?.FirstOrDefault()?.Message?.Content;
 
         if (string.IsNullOrWhiteSpace(text))
         {
-            _logger.LogWarning("Gemini returned an empty response");
+            _logger.LogWarning("DeepSeek returned an empty response");
             return null;
         }
 
@@ -1438,15 +1460,12 @@ public class AiAgronomistService : BackgroundService
         string GrowthStage,
         string Notes);
 
-    private record GeminiGenerateContentResponse(
-        [property: JsonPropertyName("candidates")] List<GeminiCandidate>? Candidates);
+    private record ChatCompletionResponse(
+        [property: JsonPropertyName("choices")] List<ChatCompletionChoice>? Choices);
 
-    private record GeminiCandidate(
-        [property: JsonPropertyName("content")] GeminiContent? Content);
+    private record ChatCompletionChoice(
+        [property: JsonPropertyName("message")] ChatCompletionMessage? Message);
 
-    private record GeminiContent(
-        [property: JsonPropertyName("parts")] List<GeminiPart>? Parts);
-
-    private record GeminiPart(
-        [property: JsonPropertyName("text")] string? Text);
+    private record ChatCompletionMessage(
+        [property: JsonPropertyName("content")] string? Content);
 }

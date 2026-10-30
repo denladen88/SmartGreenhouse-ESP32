@@ -87,12 +87,12 @@ Runner робить `checkout` у тимчасову робочу теку, як
 
 | Name | Value |
 |------|-------|
-| `GEMINI_API_KEY` | **лише саме значення ключа**, БЕЗ `Gemini__ApiKey=` спереду, без лапок, без пробілів/переносу в кінці |
+| `DEEPSEEK_API_KEY` | **лише саме значення ключа** (разом із префіксом `sk-`), БЕЗ `DeepSeek__ApiKey=` спереду, без лапок, без пробілів/переносу в кінці |
 
 > ⚠️ **Граблі, на які ми наступили:** якщо вставити в секрет цілий рядок із `.env`
-> (`Gemini__ApiKey=AQ...`), крок деплою додасть свій префікс `Gemini__ApiKey=` ще раз →
-> у контейнер потрапить `Gemini__ApiKey=Gemini__ApiKey=AQ...` → Google відповідає
-> `API_KEY_INVALID`. У секреті — **тільки значення**.
+> (`DeepSeek__ApiKey=sk-...`), крок деплою додасть свій префікс `DeepSeek__ApiKey=` ще раз →
+> у контейнер потрапить `DeepSeek__ApiKey=DeepSeek__ApiKey=sk-...` → DeepSeek відповідає
+> `401 Authentication Fails`. У секреті — **тільки значення**.
 
 `Api__Key` (ключ до власного API Backend, зараз `1988`) береться з закоміченого
 `Backend/appsettings.json`, окремий секрет не потрібен. Захочеш ротувати — додаси секрет
@@ -219,7 +219,7 @@ docker compose down
 > слати команди на **реальний ESP-32**. Щоб ізолюватись — у локальний `Backend/.env`
 > додай `Mqtt__Server=localhost` (або підніми локальний Mosquitto).
 
-Для AI Agronomist локально потрібен валідний Gemini-ключ у локальному `Backend/.env`
+Для AI Agronomist локально потрібен валідний DeepSeek-ключ у локальному `Backend/.env`
 (секрет GitHub туди не приходить).
 
 ---
@@ -246,7 +246,7 @@ docker run --rm -v smartgreenhouse_greenhouse_data:/data -v "$PWD":/backup alpin
 ```bash
 cd ~/actions-runner-greenhouse/_work/SmartGreenhouse-ESP32/SmartGreenhouse-ESP32
 # або будь-який свіжий клон репо з правильним docker-compose.yml
-echo "Gemini__ApiKey=<ключ>" > Backend/.env
+echo "DeepSeek__ApiKey=sk-<ключ>" > Backend/.env
 echo "<GHCR_TOKEN>" | docker login ghcr.io -u denladen88 --password-stdin
 docker compose pull backend
 docker compose up -d backend
@@ -284,9 +284,9 @@ git push        # backend-build → docker → deploy зі старим кодо
 |---------|---------|------|
 | `deploy` висить `Waiting for a runner`, у лозі `Requested labels: self-hosted, smartgreenhouse` | на runner'і немає мітки `smartgreenhouse` | додати мітку (розд. 3.3), `Re-run failed jobs` |
 | runner **Offline** на сторінці Runners | сервіс не працює | `cd ~/actions-runner-greenhouse && sudo ./svc.sh start`; `journalctl -u actions.runner.denladen88-SmartGreenhouse-ESP32.lenovo-srv -n 30` |
-| у лозі Gemini `API_KEY_INVALID`, а `printenv \| grep -i gemini` показує подвоєний `Gemini__ApiKey=Gemini__ApiKey=...` | у секрет вставлено цілий рядок `.env` замість значення | оновити секрет `GEMINI_API_KEY` — тільки значення; `Re-run` |
-| `API_KEY_INVALID` при одинарному префіксі | ключ протермінований / не той | новий ключ https://aistudio.google.com/apikey (формат `AIza...`), оновити секрет, `Re-run` |
-| Google `model not found` / 404 | `Gemini:Model` у `appsettings.json` неактуальний (`gemini-3.5-flash`) | замінити на актуальну модель, закомітити, push |
+| у лозі DeepSeek `401 Authentication Fails`, а `printenv \| grep -i deepseek` показує подвоєний `DeepSeek__ApiKey=DeepSeek__ApiKey=...` | у секрет вставлено цілий рядок `.env` замість значення | оновити секрет `DEEPSEEK_API_KEY` — тільки значення; `Re-run` |
+| `401 Authentication Fails` при одинарному префіксі | ключ без `sk-` на початку, відкликаний або не той | новий ключ https://platform.deepseek.com/api_keys (формат `sk-...`), оновити секрет, `Re-run` |
+| DeepSeek `400` про модель або `unsupported image` | `DeepSeek:Model` у `appsettings.json` неактуальний або не приймає зображення (`deepseek-flash`) | `curl https://api.deepseek.com/models -H "Authorization: Bearer sk-..."`, взяти модель з `"image"` у `input_modalities`, закомітити, push |
 | `docker compose up` → `port is already allocated` | 8080 на сервері вже зайнято | у `docker-compose.yml` змінити ліву цифру: `ports: - "8090:8080"`, push |
 | контейнер стартує, але не бачить MQTT-брокер / ESP32-CAM | bridge-мережа не пускає до LAN | у `docker-compose.yml` розкоментувати `network_mode: host`, push |
 | health-check червоний, у лозі контейнера exception на старті | напр. збій міграції БД, поганий конфіг | глянути `docker compose -p smartgreenhouse logs --tail=100 backend`; за потреби відкат (розд. 7) |
@@ -299,7 +299,7 @@ git push        # backend-build → docker → deploy зі старим кодо
 
 1. **Сервер:** Ubuntu x86_64, встановити Docker Engine + compose-плагін, користувача
    додати в групу `docker`.
-2. **GitHub secret:** `GEMINI_API_KEY` = значення ключа (розд. 3.1).
+2. **GitHub secret:** `DEEPSEEK_API_KEY` = значення ключа (розд. 3.1).
 3. **Runner:** розд. 3.2 — окрема тека, `config.sh --url ... --labels smartgreenhouse`,
    `svc.sh install/start`.
 4. **Мітка:** переконатись, що на runner'і є `smartgreenhouse` (розд. 3.3).

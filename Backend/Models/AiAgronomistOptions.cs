@@ -2,14 +2,14 @@ namespace SmartGreenhouse.Backend.Models;
 
 public class AiAgronomistOptions
 {
-    // Локальна година доби (0-23), о якій Gemini "по плану" переглядає фото+тренд
+    // Локальна година доби (0-23), о якій DeepSeek "по плану" переглядає фото+тренд
     // і переписує ідеальний профіль рослини (PlantProfile) — рівно один раз на
     // добу. Рішеннями актуаторів між цими оглядами керує локальний контролер
     // (AiAgronomistService.RunLocalControlAsync), не AI.
     public int DailyAnalysisHour { get; set; } = 12;
 
     // Якщо щоденний AI-огляд не завершився успішним записом профілю (немає
-    // телеметрії, Gemini/БД тимчасово недоступні або відповідь невалідна),
+    // телеметрії, DeepSeek/БД тимчасово недоступні або відповідь невалідна),
     // повторювати спробу з цим інтервалом до успіху.
     public int DailyAnalysisRetryMinutes { get; set; } = 15;
 
@@ -17,7 +17,7 @@ public class AiAgronomistOptions
     public int TrendBucketMinutes { get; set; } = 60;
 
     // Скільки згрупованих сегментів історії актуаторів (SummarizeActuatorHistory)
-    // показувати Gemini в промпті.
+    // показувати DeepSeek в промпті.
     public int DecisionHistoryCount { get; set; } = 5;
 
     // Lux рівень, що вважається "ефективним" ростовим світлом (сонце і/або

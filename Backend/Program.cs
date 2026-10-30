@@ -32,7 +32,7 @@ builder.Logging.AddConsole();
 builder.Logging.AddDebug();
 
 builder.Services.Configure<MqttOptions>(builder.Configuration.GetSection("Mqtt"));
-builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection("Gemini"));
+builder.Services.Configure<DeepSeekOptions>(builder.Configuration.GetSection("DeepSeek"));
 builder.Services.Configure<Esp32Options>(builder.Configuration.GetSection("Esp32"));
 builder.Services.Configure<AiAgronomistOptions>(builder.Configuration.GetSection("AiAgronomist"));
 builder.Services.Configure<PlantOptions>(builder.Configuration.GetSection("Plant"));
@@ -43,9 +43,9 @@ builder.Services.AddDbContext<AppDbContext>();
 
 builder.Services.AddHttpClient(nameof(AiAgronomistService), client =>
 {
-    // Shared by the fast ESP32 /capture GET and the slower Gemini vision POST (image + prompt) —
-    // 30s was cutting it close for Gemini now that photos are larger (UXGA capture).
-    client.Timeout = TimeSpan.FromSeconds(45);
+    // Shared by the fast ESP32 /capture GET and the slower DeepSeek vision POST (image + prompt) —
+    // DeepSeek reasons before answering (reasoning_content), so a full daily prompt can take well over 45s.
+    client.Timeout = TimeSpan.FromSeconds(120);
 });
 
 // Окремий, коротший таймаут для CameraController: це живий проксі-запит з

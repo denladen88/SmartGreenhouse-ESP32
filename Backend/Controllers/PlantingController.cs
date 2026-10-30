@@ -8,7 +8,7 @@ using SmartGreenhouse.Backend.Services;
 namespace SmartGreenhouse.Backend.Controllers;
 
 // Довжини обмежені не лише проти "роздутої" БД, а й тому, що PlantName/Notes
-// підставляються прямо в промпт до Gemini (AiAgronomistService) — довший
+// підставляються прямо в промпт до DeepSeek (AiAgronomistService) — довший
 // текст, у якому легше заховати спробу маніпуляції відповіддю LLM.
 public record PlantingRequest(
     [param: MaxLength(100)] string PlantName,
@@ -58,7 +58,7 @@ public class PlantingController : ControllerBase
         _db.Plantings.Add(planting);
         await _db.SaveChangesAsync(ct);
 
-        // Не чекаємо на Gemini (може тривати десятки секунд з ретраями) в межах
+        // Не чекаємо на DeepSeek (може тривати десятки секунд з ретраями) в межах
         // цього HTTP-запиту — застосунок отримує відповідь одразу, перший
         // AI-профіль з'явиться за кілька хвилин у фоні.
         _ = _aiAgronomist.TriggerImmediateProfileAnalysisAsync($"New planting started via mobile app: {planting.PlantName}");
